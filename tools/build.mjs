@@ -1,6 +1,6 @@
 // Bundle src/ into the single self-contained deliverable held.html.
 import { build } from 'esbuild';
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -26,3 +26,11 @@ if (bad.length) {
   process.exit(1);
 }
 console.log(`held.html  ${(html.length / 1024).toFixed(1)} KB`);
+
+// Variant for publishing as a claude.ai artifact: the host wraps the page in
+// its own <html>/<head>/<body> skeleton, so emit only title, style, canvas
+// and script.
+const body = html.replace(/^[\s\S]*?<head>/i, '').replace(/<\/head>\s*<body>/i, '').replace(/<\/body>\s*<\/html>\s*$/i, '')
+  .replace(/<meta[^>]*>\s*/gi, '');
+mkdirSync(join(root, 'dist'), { recursive: true });
+writeFileSync(join(root, 'dist/held.artifact.html'), body.trim() + '\n');

@@ -19,6 +19,9 @@ import { strokeText } from './film/glyphs.js';
 import { identity } from './math.js';
 
 const params = new URLSearchParams(location.search);
+// artifact viewers only pass a bare #anchor, so #debug and #bench work too
+const hash = (location.hash || '').replace('#', '');
+if (hash === 'debug' || hash === 'bench') params.set(hash, '');
 const OPT = {
   t: parseFloat(params.get('t') ?? '0') || 0,
   freeze: params.has('freeze'),
@@ -223,8 +226,16 @@ async function boot() {
     player.start(OPT.t);
     playing = true;
     document.body.classList.add('playing');
+    // fullscreen is optional: some viewers refuse it
+    try {
+      const fs = document.documentElement.requestFullscreen?.();
+      if (fs && fs.catch) fs.catch(() => {});
+    } catch (e) {
+      /* stay windowed */
+    }
   };
   canvas.addEventListener('click', go);
+  window.addEventListener('resize', () => sizeCanvas(canvas));
   window.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') go(); });
 }
 
@@ -269,6 +280,18 @@ function bench(engine, film, adapt) {
       window.__bench = res;
       console.table(res);
       document.title = 'HELD bench done';
+      // show the result on screen with the stroke font
+      const lines = res.map((x) => `${x.movement.split(' ')[0]} P50 ${x.p50} P95 ${x.p95} GPU ${isNaN(x.gpuP50) ? '-' : x.gpuP50}`);
+      const ID = identity();
+      const batch = new LineBatch();
+      lines.forEach((l, i) => strokeText(batch, l, [-1.1, 0.5 - i * 0.2, 0], 0.08, { width: 1.2, spacing: 0.3, align: 'left' }));
+      batch.build(gl);
+      const show = {
+        shot: () => ({ cam: { pos: [0, 0, 3], target: [0, 0, 0], fov: 40, aperture: 0 }, light: { keyDir: [0, 0, 1], keyCol: [1, 1, 1], amb: [0.1, 0.1, 0.1], rim: [0, 0, 0], glowWorld: [0, 0, 0], glowRadius: 1, glowCol: [0, 0, 0] }, grade: { fade: 1 } }),
+        items: () => [{ kind: 'line', draw: (f, R) => R.lines.draw(batch, { model: ID }) }],
+      };
+      const hold = () => { engine.render(show, 0, 1); requestAnimationFrame(hold); };
+      requestAnimationFrame(hold);
       return;
     }
     requestAnimationFrame(loop);

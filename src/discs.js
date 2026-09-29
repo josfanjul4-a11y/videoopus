@@ -7,13 +7,15 @@
 
 import { program, instancedVAO } from './gl.js';
 
-export const DISC = { COIN: 0, PEARL: 1, MOON: 2, BEAD: 3, BUBBLE: 4, DOT: 5, TAG: 6 };
+export const DISC = { COIN: 0, PEARL: 1, MOON: 2, BEAD: 3, BUBBLE: 4, DOT: 5, TAG: 6, CELL: 7 };
 
 const VS = `
 layout(location=0) in vec2 aCorner;
 layout(location=1) in vec4 aPosR;      // xyz, radius
 layout(location=2) in vec4 aParam;     // type, p1, p2, seed
 layout(location=3) in vec4 aAnim;      // appear time, fade, sway amplitude, sway phase
+layout(location=4) in vec4 aFrom;      // start position xyz, start radius
+layout(location=5) in vec4 aMove;      // move start, move duration, end time (0 = never), drift speed (up)
 uniform mat4 uView, uProj, uModel;
 uniform float uTime, uAlpha;
 uniform vec2 uRes;
@@ -23,9 +25,14 @@ out vec2 vQ;
 out float vType, vP1, vP2, vSeed, vAlpha, vDepth, vPx;
 out vec3 vVP;
 void main() {
-  vec3 p = aPosR.xyz;
+  float mv = clamp((uTime - aMove.x) / max(aMove.y, 1e-3), 0.0, 1.0);
+  mv = mv * mv * (3.0 - 2.0 * mv);
+  vec3 p = mix(aFrom.xyz, aPosR.xyz, mv);
+  float rad = mix(aFrom.w, aPosR.w, mv);
+  p.y += aMove.w * uTime;
   float t0 = aAnim.x;
   float a = uAlpha * smoothstep(t0, t0 + max(aAnim.y, 1e-3), uTime);
+  if (aMove.z > 0.0) a *= 1.0 - step(aMove.z, uTime);
   // gentle pendulum sway of hanging things
   p.x += aAnim.z * sin(uTime * uP0.x + aAnim.w);
   p.y += uP0.y;
@@ -33,12 +40,12 @@ void main() {
   float z = -vp.z;
   if (a <= 0.002 || z < 0.05) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   float pxPerUnit = uProj[1][1] * 0.5 * uRes.y / z;
-  float rPx = aPosR.w * pxPerUnit;
+  float rPx = rad * pxPerUnit;
   float coc = uAperture * abs(z - uFocus) / z * uRes.y;
   float grow = (rPx + 0.5 * coc + 1.0) / max(rPx, 1e-4);
   a *= min(1.0, (rPx * rPx + 1.0) / ((rPx + 0.5 * coc) * (rPx + 0.5 * coc) + 1.0));
   if (rPx < 0.7) a *= rPx / 0.7;
-  vp.xy += aCorner * aPosR.w * grow;
+  vp.xy += aCorner * rad * grow;
   vQ = aCorner * grow;
   vType = aParam.x; vP1 = aParam.y; vP2 = aParam.z; vSeed = aParam.w;
   vAlpha = a;
@@ -56,6 +63,7 @@ in vec3 vVP;
 uniform vec3 uGold, uGoldHi, uBone, uKeyDir, uKeyCol, uAmb;
 uniform vec4 uGlowPos; uniform vec3 uGlowCol;
 uniform float uCore;     // bead's inner warmth
+uniform float uCellWarm; // cells' inner warmth
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oDepth;
 float h(float x) { return fract(sin(x * 91.7 + vSeed * 13.1) * 43758.5453); }
@@ -109,9 +117,20 @@ void main() {
     float rim = smoothstep(0.80, 0.97, r) * (1.0 - smoothstep(0.985, 1.0, r));
     float inner = 0.06 + 0.1 * smoothstep(0.4, 0.95, r);
     float glint = exp(-dot(vQ - vec2(-0.38, 0.42), vQ - vec2(-0.38, 0.42)) * 60.0);
-    a = cov * clamp(inner + rim * 0.9 + glint * 0.8, 0.0, 1.0);
-    col = mix(uGold, uGoldHi, 0.5) * (0.5 + rim * 1.4 + glint * 2.0);
+    a = cov * clamp(inner + rim * 0.75 + glint * 0.7, 0.0, 1.0);
+    col = mix(uGold, uGoldHi, 0.5) * (0.35 + rim * 0.8 + glint * 1.6);
     col += vec3(0.6, 0.35, 0.5) * 0.15 * smoothstep(0.5, 0.9, r) * (1.0 - rim);
+  } else if (type == 7) {
+    // a living cell: translucent, a bright membrane, a warm core that can cool into a bubble
+    vec3 n = vec3(vQ, sqrt(max(0.0, 1.0 - r * r)));
+    float rim = smoothstep(0.72, 0.96, r) * (1.0 - smoothstep(0.975, 1.0, r));
+    float warm = clamp(vP1 * uCellWarm, 0.0, 1.0);
+    float core = exp(-r * r * 2.2) * warm;
+    float glint = exp(-dot(vQ - vec2(-0.35, 0.4), vQ - vec2(-0.35, 0.4)) * 40.0);
+    float tex = 0.75 + 0.25 * vn(vQ * 4.0 + vSeed);
+    float live = 0.25 + 0.75 * warm;
+    a = cov * clamp(0.06 + 0.55 * core * tex + rim * 0.8 * live + glint * 0.5 * live, 0.0, 1.0);
+    col = vec3(1.0, 0.6, 0.26) * core * 2.2 * tex + mix(uGold, uGoldHi, 0.6) * (rim * 1.1 + glint * 1.4) * live + vec3(0.9, 0.5, 0.3) * 0.1;
   } else if (type == 5) {
     // glowing dot
     float core = exp(-r * r * 4.0);
@@ -136,24 +155,29 @@ export class DiscSet {
   constructor() {
     this.items = [];
   }
-  // d: { pos, r, type, p1=0, p2=0, seed=0, t0=-1e9, fade=0.001, sway=0, phase=0 }
+  // d: { pos, r, type, p1=0, p2=0, seed=0, t0=-1e9, fade=0.001, sway=0, phase=0,
+  //      from=pos, r0=r, moveT=-1e9, moveDur=1, end=0, drift=0 }
   add(d) {
-    this.items.push([...d.pos, d.r, d.type, d.p1 ?? 0, d.p2 ?? 0, d.seed ?? 0, d.t0 ?? -1e9, d.fade ?? 0.001, d.sway ?? 0, d.phase ?? 0]);
+    const from = d.from ?? d.pos;
+    this.items.push([...d.pos, d.r, d.type, d.p1 ?? 0, d.p2 ?? 0, d.seed ?? 0, d.t0 ?? -1e9, d.fade ?? 0.001, d.sway ?? 0, d.phase ?? 0,
+      ...from, d.r0 ?? d.r, d.moveT ?? -1e9, d.moveDur ?? 1, d.end ?? 0, d.drift ?? 0]);
     return this;
   }
   build(gl) {
-    const data = new Float32Array(this.items.length * 12);
+    const data = new Float32Array(this.items.length * 20);
     let cx = 0, cy = 0, cz = 0;
     this.items.forEach((it, i) => {
-      data.set(it, i * 12);
+      data.set(it, i * 20);
       cx += it[0]; cy += it[1]; cz += it[2];
     });
     const n = Math.max(1, this.items.length);
     this.center = [cx / n, cy / n, cz / n];
-    this.gpu = instancedVAO(gl, data, 48, [
+    this.gpu = instancedVAO(gl, data, 80, [
       { size: 4, offset: 0 },
       { size: 4, offset: 16 },
       { size: 4, offset: 32 },
+      { size: 4, offset: 48 },
+      { size: 4, offset: 64 },
     ]);
     this.count = this.items.length;
     this.items = null;
@@ -173,7 +197,7 @@ export function createDiscRenderer(gl) {
         .f1('uFocus', frame.focus).f1('uAperture', frame.aperture).v4('uP0', u.p0 ?? [0.6, 0, 0, 0])
         .v3('uGold', u.gold ?? [0.66, 0.36, 0.07]).v3('uGoldHi', u.goldHi ?? [0.92, 0.77, 0.43]).v3('uBone', u.bone ?? [0.81, 0.76, 0.63])
         .v3('uKeyDir', L.keyDir).v3('uKeyCol', L.keyCol).v3('uAmb', L.amb)
-        .v4('uGlowPos', L.glowPos).v3('uGlowCol', L.glowCol).f1('uCore', u.core ?? 0.3);
+        .v4('uGlowPos', L.glowPos).v3('uGlowCol', L.glowCol).f1('uCore', u.core ?? 0.3).f1('uCellWarm', u.cellWarm ?? 1);
       gl.bindVertexArray(set.gpu.vao);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, set.count);
       gl.bindVertexArray(null);

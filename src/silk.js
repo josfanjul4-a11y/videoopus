@@ -48,37 +48,32 @@ uniform vec4 uGlowPos; uniform vec3 uGlowCol;
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oDepth;
 float h11(float x) { return fract(sin(x * 127.1) * 43758.5453); }
-float fibre(float v, float s, float n) {
-  // n fibres across the band, each a thin bright line that wanders slightly
-  float x = (v * 0.5 + 0.5) * n;
-  float i = floor(x);
-  float f = fract(x);
-  float c = 0.5 + (h11(i) - 0.5) * 0.6 + 0.08 * sin(s * 40.0 + i * 3.1);
-  float w = 0.04 + 0.1 * h11(i + 17.0);
-  float br = 0.25 + 0.75 * h11(i + 31.0);
-  return exp(-pow((f - c) / w, 2.0)) * br;
-}
 void main() {
-  // reveal window along s
   float head = uReveal.y, tail = uReveal.x;
   if (vS > head || vS < tail) discard;
-  float edgeFade = smoothstep(1.0, 0.82, abs(vV));
-  float f1 = fibre(vV, vS * uLength, uFibres);
-  float f2 = fibre(vV * 0.97 + 0.013, vS * uLength * 1.3, uFibres * 2.3) * 0.6;
-  float fib = max(f1, f2);
-  float graze = pow(1.0 - vFacing, 2.0);
-  float body = 0.10 + 0.25 * graze * uSheen;
-  float a = (body + fib * (0.35 + 0.65 * graze)) * edgeFade * uAlpha;
-  // bright drawing head
+  float av = abs(vV);
+  // fine straight fibres: many faint parallel lines across the width
+  float x = (vV * 0.5 + 0.5) * uFibres * 3.0;
+  float fi = floor(x);
+  float ff = fract(x);
+  float fib = exp(-pow((ff - 0.5) / (0.12 + 0.1 * h11(fi)), 2.0)) * (0.3 + 0.7 * h11(fi + 7.0));
+  // a smooth sheen across the band and at grazing angles
+  float graze = pow(1.0 - vFacing, 2.5);
+  float across = 0.6 + 0.4 * cos(vV * 3.14159 * 0.5);
+  // thin bright hems along both edges
+  float fw = fwidth(vV) * 1.5 + 1e-4;
+  float hem = smoothstep(1.0 - fw * 3.0, 1.0 - fw, av) * (1.0 - smoothstep(1.0 - fw, 1.0, av));
+  float edgeAA = 1.0 - smoothstep(1.0 - fw, 1.0, av);
+  float a = (0.07 * across + 0.22 * graze * uSheen + fib * 0.1 + hem * 0.55) * edgeAA * uAlpha;
   float hd = exp(-max(head - vS, 0.0) / max(uReveal.z, 1e-4));
   a *= mix(1.0, 1.0 + 3.0 * hd, step(head, 0.9999));
   a *= smoothstep(tail, tail + uReveal.w, vS);
-  vec3 col = mix(uColA, uColB, clamp(fib * 1.2 + graze * 0.5, 0.0, 1.0));
+  vec3 col = mix(uColA, uColB, clamp(graze * 0.8 + hem + fib * 0.3, 0.0, 1.0));
   float gd = length(uGlowPos.xyz - vVP) / max(uGlowPos.w, 1e-3);
-  col += uGlowCol * 0.5 / (1.0 + gd * gd);
+  col += uGlowCol * 0.35 / (1.0 + gd * gd);
   col *= 1.0 + 2.5 * hd * step(head, 0.9999);
   a = clamp(a, 0.0, 1.0);
-  oColor = vec4(col * a, a * 0.85);
+  oColor = vec4(col * a, a * 0.8);
   oDepth = vec4(vDepth * a * 0.5, 0.0, 0.0, a * 0.5);
 }`;
 

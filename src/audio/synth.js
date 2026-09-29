@@ -189,21 +189,22 @@ export function strings(ctx, sh, out, t, midi, vel = 0.4, dur = 3, pan = 0, atta
   env(g, t, attack, vel * 0.16, 1.2, 0.85, release * 0.4, t + dur);
   lp.connect(body).connect(g).connect(pn).connect(out);
   const stopAt = t + dur + release * 2.5;
-  for (let k = 0; k < 5; k++) {
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 4.6 + sh.rnd.next() * 1.2;
+  const lg = ctx.createGain();
+  lg.gain.value = 5 + sh.rnd.next() * 3;
+  lfo.connect(lg);
+  lfo.start(t);
+  lfo.stop(stopAt);
+  for (let k = 0; k < 3; k++) {
     const o = ctx.createOscillator();
     o.setPeriodicWave(sh.stringWave);
     o.frequency.value = f;
-    o.detune.value = (k - 2) * 7 + (sh.rnd.next() - 0.5) * 4;
-    const lfo = ctx.createOscillator();
-    lfo.frequency.value = 4.6 + sh.rnd.next() * 1.2;
-    const lg = ctx.createGain();
-    lg.gain.value = 5 + sh.rnd.next() * 3;
-    lfo.connect(lg).connect(o.detune);
+    o.detune.value = (k - 1) * 9 + (sh.rnd.next() - 0.5) * 4;
+    if (k !== 1) lg.connect(o.detune);
     o.connect(lp);
     o.start(t);
-    lfo.start(t);
     o.stop(stopAt);
-    lfo.stop(stopAt);
   }
 }
 
@@ -262,11 +263,11 @@ export function choir(ctx, sh, out, t, midi, vel = 0.4, dur = 3, pan = 0, vowel 
   b1.connect(mix); b2.connect(mix); dry.connect(mix);
   mix.connect(g).connect(pn).connect(out);
   const stopAt = t + dur + 3;
-  for (let k = 0; k < 3; k++) {
+  for (let k = 0; k < 2; k++) {
     const o = ctx.createOscillator();
     o.setPeriodicWave(sh.choirWave);
     o.frequency.value = f;
-    o.detune.value = (k - 1) * 6;
+    o.detune.value = (k - 0.5) * 8;
     const lfo = ctx.createOscillator();
     lfo.frequency.value = 4.2 + k * 0.37;
     const lg = ctx.createGain();
@@ -276,7 +277,7 @@ export function choir(ctx, sh, out, t, midi, vel = 0.4, dur = 3, pan = 0, vowel 
     o.start(t); lfo.start(t); o.stop(stopAt); lfo.stop(stopAt);
   }
   // glass layer: pure sines beating slowly an octave up
-  [0, 1.5].forEach((dc) => {
+  [0].forEach((dc) => {
     const o = ctx.createOscillator();
     o.frequency.value = f * 2;
     o.detune.value = dc;

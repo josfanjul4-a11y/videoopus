@@ -11,7 +11,7 @@ low) in the review section once Phase 4 starts.
 |---|---|
 | 1 Concept | Done. **HELD** approved at checkpoint #1. |
 | 2 Pre-production | Plan written (PLAN.md §4). Spikes done; see the table in session 1. |
-| 3 Production | Not started |
+| 3 Production | First complete rough cut built (session 1). Waiting on human checkpoint #2. |
 | 4 Review loop | Not started |
 
 Human checkpoints: (1) after the concept, (2) after the first complete rough cut,
@@ -81,3 +81,48 @@ Human checkpoints: (1) after the concept, (2) after the first complete rough cut
 | medium | Style frame is denser than the refs (41 % of pixels below luma 20 vs 51–56 %). Compose with more black. |
 | medium | Paint edges too gravel-like; want longer flowing contours at mass edges. |
 | low | Wash layer is barely visible; tune or drop. |
+
+### Session 1, continued: production to the first complete rough cut
+
+- `src/film/`: `cues.js` (master timeline, heartbeat schedule, heart gain,
+  dynamics curve), `world.js` (time as space: the present's x(t) integrated
+  from a speed curve, the life, partner and child curves), `camera.js` (one
+  Hermite camera through keyframes; the life's tracking keys are generated
+  from the present), `birth.js` (movements 0 and I), `life.js` (II),
+  `death.js` (III and IV), `embryo.js`, `glyphs.js` (stroke font), `film.js`.
+- `src/audio/score.js`: the full score from the same cue table. Renderer now
+  splits the film into parallel windows (10 s pre-roll, per-event seeded RNG,
+  a context proxy that shifts every scheduled time), plus one context for
+  long drones; a dynamics curve is applied after the render, then mastering.
+- Playback shell: start screen (title, a ring filling while the score
+  renders, then CLICK), audio clock drives t, dynamic resolution, `?debug`
+  overlay drawn with the stroke font, `?bench` per-movement frame times
+  (GPU timer query where available), `?solo=tags` for inspection.
+- Checks: `tools/playtest.mjs` (start → render → click → playback: no errors,
+  film time follows audio). Film score: **−14.62 LUFS, −1.19 dBTP, 0 clipped**.
+  Rough-cut contact sheet: `review/rough_cut_1.jpg`.
+
+**Art-direction fixes made while building (logged for the making-of)**
+
+- Embryo read as a "snowman", then as a box: rebuilt as a C-curled SDF
+  (big head bent forward, tapering body, limb buds) and strokes oriented by
+  `cross(n, view)` so they follow the silhouette (horizontal strokes made
+  flat tops). Glow light excluded from the embryo's own dabs (it blew out).
+- Silk read as feathers/frost: rewritten as mostly transparent bands with
+  fine straight fibres, grazing sheen and thin antialiased hems.
+- Curtain of kept lives was a wall of gold: thinned to 150 threads, dimmed
+  during the return so the last frame matches the first.
+
+**Known issues at rough cut 1** (to be logged into the review loop)
+
+| Sev | Issue |
+|---|---|
+| high | Score render takes ~26–31 s on this 4-vCPU container (start-screen wait). Target < 10 s on a 2022 laptop; needs measuring there and more optimisation. |
+| high | Figure (III) is legible but reads as a plaster bust; needs ref 2's marble, smoke, gold-leaf richness. |
+| high | Real-GPU frame times unknown: run `held.html?bench` on real hardware. |
+| medium | Quickening frames are cluttered (silk hems, tissue dots, bubbles, haze). |
+| medium | Midpoint pull-back (63–71) is too far: the life is a thin strip, the arcs are faint. |
+| medium | Drips and age slabs form a "barcode" / skyline; the age slabs dominate at 84–88 s. |
+| medium | Figure rise (90–93) is a messy brown particle cloud. |
+| medium | Love section is about as loud as the climax (−9 vs −8 LUFS short-term). |
+| low | Integrated loudness −14.62 (inside ±1 LU but could sit closer to −14). |

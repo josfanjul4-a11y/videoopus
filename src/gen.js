@@ -155,3 +155,44 @@ export function beadThread(lines, discs, r, o) {
     discs.add({ pos: [o.x, y, o.z], r: rr, type, p1: r.next() * 1.6 - 0.8, p2: r.sign(), seed: r.next() * 10, t0: o.t0 ?? -1e9, fade: o.fade ?? 0.5, sway: o.sway ?? 0, phase: r.next() * 6.28 });
   }
 }
+
+// A botanical gold tree (ref 3): tapered, curving, branching; growth order is
+// kept so the line renderer can reveal it as it grows.
+// o: { root, dir, len, depth, speed, bend:[x,y,z] (tropism), t0 }
+export function growTree(r, o) {
+  const branches = [], buds = [];
+  const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  const sc = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+  function grow(p, dir, len, depth, t0, width) {
+    const n = Math.max(5, Math.round(len * 26));
+    const pts = [p.slice()], dirs = [dir.slice()];
+    let d = dir.slice(), cur = p.slice();
+    for (let i = 1; i <= n; i++) {
+      d = norm(add(add(d, sc(o.bend ?? [0, 0, 0], 1 / n)), [r.gauss() * 0.05, r.gauss() * 0.05, r.gauss() * 0.04]));
+      cur = add(cur, sc(d, len / n));
+      pts.push(cur.slice());
+      dirs.push(d.slice());
+    }
+    const t1 = t0 + len / o.speed;
+    branches.push({ pts, t0, t1, w0: width, w1: Math.max(0.6, width * 0.62) });
+    if (depth <= 0) {
+      if (r.next() < 0.5) buds.push({ pos: cur, t: t1, size: 0.6 + r.next() * 0.6 });
+      return;
+    }
+    const kids = depth >= 4 ? 2 + (r.next() < 0.3 ? 1 : 0) : r.int(1, 3);
+    for (let k = 0; k < kids; k++) {
+      const at = 0.35 + 0.6 * r.next();
+      const idx = Math.max(1, Math.min(n - 1, Math.floor(at * n)));
+      const pd = dirs[idx];
+      const ang = (k % 2 ? 1 : -1) * (0.3 + r.next() * 0.55);
+      const c = Math.cos(ang), s = Math.sin(ang);
+      const nd = norm([pd[0] * c - pd[1] * s, pd[0] * s + pd[1] * c, pd[2] + r.gauss() * 0.35]);
+      grow(pts[idx], nd, len * (0.58 + r.next() * 0.18), depth - 1, t0 + at * (t1 - t0), width * 0.66);
+      if (r.next() < 0.22) buds.push({ pos: pts[idx], t: t0 + at * (t1 - t0), size: 0.8 + r.next() * 0.7 });
+    }
+  }
+  grow(o.root, norm(o.dir), o.len, o.depth, o.t0 ?? 0, o.width ?? 2.6);
+  let tMax = 0;
+  for (const b of branches) tMax = Math.max(tMax, b.t1);
+  return { branches, buds, tMax };
+}

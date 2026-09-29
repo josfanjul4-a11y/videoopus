@@ -233,6 +233,16 @@ uniform float uCellMix;   // 0 = dab colour, 1 = palette field colour
 uniform float uFacet;     // per-cell facet tilt
 uniform float uTorn;      // edges follow the cell borders
 uniform float uMosScaleF;
+uniform float uGlowAmt;   // how much the local glow light lights this object
+uniform vec4 uKx0, uKx1, uKu0, uKu1;   // optional piecewise-linear remap of the field (8 knots)
+uniform float uRemap;
+float remapU(float x) {
+  float kx[8] = float[8](uKx0.x, uKx0.y, uKx0.z, uKx0.w, uKx1.x, uKx1.y, uKx1.z, uKx1.w);
+  float ku[8] = float[8](uKu0.x, uKu0.y, uKu0.z, uKu0.w, uKu1.x, uKu1.y, uKu1.z, uKu1.w);
+  if (x <= kx[0]) return ku[0];
+  for (int i = 1; i < 8; i++) if (x <= kx[i]) return mix(ku[i - 1], ku[i], (x - kx[i - 1]) / max(kx[i] - kx[i - 1], 1e-5));
+  return ku[7];
+}
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oDepth;
 
@@ -283,6 +293,7 @@ void main() {
     float u;
     if (uFieldC.z < 0.5) u = dot(centre, uField.xy) * uField.z + uField.w;
     else u = length(centre - uFieldC.xy) * uField.z + uField.w;
+    if (uRemap > 0.5) u = remapU(u);
     u += uFieldN.y * (sinNoise(centre * uFieldN.x) + 0.6 * sinNoise(centre * uFieldN.x * 2.9 + 4.1)) + (cellH - 0.5) * uFieldN.z;
     vec3 pc = toLin(texture(uPalette, vec2(clamp(u, 0.002, 0.998), (uFieldN.w + 0.5) / 16.0)).rgb);
     col = mix(col, pc, uCellMix);
@@ -304,9 +315,13 @@ void main() {
     float nh = max(dot(n, H), 0.0);
     outc = col * (0.12 + 0.6 * pow(nh, 3.0)) * uKeyCol + col * pow(nh, 24.0) * 1.8 * uKeyCol + col * uAmb * 0.7;
   } else if (vMat == 2.0) {
-    // inner light: emissive with a warm subsurface ramp
+    // inner light: emissive, with subsurface falloff at the silhouette (edges
+    // seen at grazing angles are thinner, so darker and redder)
+    float facing = clamp(vN.z, 0.0, 1.0);
+    float sss = 0.35 + 0.65 * facing * facing;
+    vec3 edgeCol = mix(col * vec3(1.0, 0.45, 0.3), col, facing);
     float wrap = clamp((ndl + 0.6) / 1.6, 0.0, 1.0);
-    outc = col * (uAmb + uKeyCol * wrap * 0.5) + col * vEmis;
+    outc = edgeCol * (uAmb + uKeyCol * wrap * 0.35) + edgeCol * vEmis * sss;
   } else if (vMat == 3.0) {
     // smoke: soft, no relief
     outc = col * (uAmb * 1.4 + uKeyCol * 0.35) + col * vEmis;
@@ -320,7 +335,7 @@ void main() {
   }
   // local glow (embryo, star) lights nearby paint
   float gd = length(uGlowPos.xyz - vVP) / max(uGlowPos.w, 1e-3);
-  outc += col * uGlowCol / (1.0 + gd * gd);
+  outc += col * uGlowCol * uGlowAmt / (1.0 + gd * gd);
   // rim: edges catch the light, as in the references
   float edge = smoothstep(0.0, 0.5, cov) * (1.0 - smoothstep(0.5, 1.0, cov));
   outc += uRimCol * edge * 0.6;
@@ -362,7 +377,9 @@ export function createDabRenderer(gl, atlas, mosaicTex, paletteTex) {
         .f1('uAccentAmt', u.accentAmt ?? 0).f1('uCrack', u.crack ?? 1).f1('uJitter', u.jitter ?? 1)
         .v3('uMosA', u.mosA ?? [1, 0, 0]).v3('uMosB', u.mosB ?? [0, 1, 0]).f1('uMosScale', u.mosScale ?? 30).f1('uMosScaleF', u.mosScale ?? 30)
         .v4('uField', u.field ?? [1, 0, 0.1, 0.5]).v4('uFieldN', u.fieldN ?? [1, 0, 0.1, 0]).v3('uFieldC', u.fieldC ?? [0, 0, 0])
-        .f1('uCellMix', u.cellMix ?? 0).f1('uFacet', u.facet ?? 0.35).f1('uTorn', u.torn ?? 0.6)
+        .f1('uCellMix', u.cellMix ?? 0).f1('uFacet', u.facet ?? 0.35).f1('uTorn', u.torn ?? 0.6).f1('uGlowAmt', u.glowAmt ?? 1)
+        .f1('uRemap', u.remap ? 1 : 0).v4('uKx0', u.remap ? u.remap[0].slice(0, 4) : [0, 0, 0, 0]).v4('uKx1', u.remap ? u.remap[0].slice(4, 8) : [0, 0, 0, 0])
+        .v4('uKu0', u.remap ? u.remap[1].slice(0, 4) : [0, 0, 0, 0]).v4('uKu1', u.remap ? u.remap[1].slice(4, 8) : [0, 0, 0, 0])
         .tex('uBrush', 0, atlas.tex, gl.TEXTURE_2D_ARRAY).tex('uMosaic', 1, mosaicTex).tex('uPalette', 2, paletteTex);
       if (u.bind) u.bind(p);
       gl.bindVertexArray(set.gpu.vao);

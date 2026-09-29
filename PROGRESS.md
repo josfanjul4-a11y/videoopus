@@ -11,8 +11,8 @@ low) in the review section once Phase 4 starts.
 |---|---|
 | 1 Concept | Done. **HELD** approved at checkpoint #1. |
 | 2 Pre-production | Plan written (PLAN.md §4). Spikes done; see the table in session 1. |
-| 3 Production | First complete rough cut built (session 1). Waiting on human checkpoint #2. |
-| 4 Review loop | Not started |
+| 3 Production | Rough cut 1 done; checkpoint #2 passed (story reads, runs smoothly; score sounds synthetic). |
+| 4 Review loop | In progress. |
 
 Human checkpoints: (1) after the concept, (2) after the first complete rough cut,
 (3) after the final audio pass.
@@ -126,3 +126,18 @@ Human checkpoints: (1) after the concept, (2) after the first complete rough cut
 | medium | Figure rise (90–93) is a messy brown particle cloud. |
 | medium | Love section is about as loud as the climax (−9 vs −8 LUFS short-term). |
 | low | Integrated loudness −14.62 (inside ±1 LU but could sit closer to −14). |
+
+### Checkpoint #2 (rough cut 1), user feedback
+
+Watched at https://claude.ai/artifact/J3V7qMCf8P2XntN8X1vcvX (private).
+
+- Story and pacing: **"Reads well, polish it."** The review passes go to
+  beauty and craft, not structure.
+- Score: **"Sounds synthetic/cheap."** Instrument timbres need work.
+- Performance on the user's machine: **"Smooth."**
+
+## Review log
+
+Severity: **high** (breaks the film or the brief), **medium** (visible or
+audible flaw a careful viewer notices), **low** (polish). Roles: D = director,
+C = cinematographer, E = graphics/audio engineer.

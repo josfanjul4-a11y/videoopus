@@ -41,14 +41,18 @@ export function makeShared(ctx) {
     const s = a.reduce((x, y) => x + y, 0);
     return a.map((x) => x / s);
   };
+  // bowed string: a sawtooth with a softened top (Helmholtz motion, rounded corner)
+  const bowAmps = Array.from({ length: 48 }, (_, i) => (1 / (i + 1)) * Math.exp(-(i + 1) / 26));
+  // glottal source: steeper tilt, a slight emphasis near the 2nd-4th harmonics
+  const glotAmps = Array.from({ length: 40 }, (_, i) => Math.pow(i + 1, -1.25) * (i >= 1 && i <= 3 ? 1.15 : 1));
   return {
     noise,
     pink,
     rnd: r,
     pianoWave: wave(norm(pianoAmps)),
-    stringWave: wave(norm(Array.from({ length: 24 }, (_, i) => 1 / (i + 1)))),
-    celloWave: wave(norm(Array.from({ length: 20 }, (_, i) => (1 / (i + 1)) * (i % 2 === 0 ? 1 : 0.55)))),
-    choirWave: wave(norm([1, 0.28, 0.12, 0.05, 0.02])),
+    stringWave: wave(norm(bowAmps)),
+    celloWave: wave(norm(Array.from({ length: 36 }, (_, i) => (1 / (i + 1)) * Math.exp(-(i + 1) / 20) * (i % 2 === 0 ? 1 : 0.7)))),
+    choirWave: wave(norm(glotAmps)),
   };
 }
 
@@ -76,65 +80,101 @@ function panner(ctx, pan) {
 }
 
 // ------------------------------------------------------------------ piano
-// vel 0..1, dur = how long the key is held
+// Additive stiff-string model: partials f_n = n f0 sqrt(1 + B n^2), amplitudes
+// shaped by the hammer's strike position and the velocity, each partial with
+// its own two-stage decay (prompt sound, then aftersound; high partials die
+// first), unison strings beating on the low partials, a hammer knock, and
+// dampers on key release. vel 0..1, dur = how long the key is held.
 export function piano(ctx, sh, out, t, midi, vel = 0.6, dur = 1.5, pan = 0) {
-  const f = mtof(midi);
-  const decay = Math.max(1.2, 9 - (midi - 36) * 0.09);
-  const end = t + Math.min(dur, decay) + 0.05;
-  const stopAt = end + 1.6;
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.Q.value = 0.4;
-  const bright = 900 + vel * 3800 + f * 1.5;
-  lp.frequency.setValueAtTime(bright, t);
-  lp.frequency.setTargetAtTime(500 + f * 1.2, t + 0.01, 0.35 + (1 - vel) * 0.2);
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0, t);
-  g.gain.linearRampToValueAtTime(vel * 0.42, t + 0.004);
-  g.gain.setTargetAtTime(vel * 0.2, t + 0.004, 0.25);
-  g.gain.setTargetAtTime(0.0001, t + 0.5, decay * 0.35);
-  g.gain.setTargetAtTime(0, end, 0.18);
-  const pn = panner(ctx, pan);
-  lp.connect(g).connect(pn).connect(out);
-  const det = [-2.2, 0.4, 2.6];
-  det.forEach((c) => {
-    const o = ctx.createOscillator();
-    o.setPeriodicWave(sh.pianoWave);
-    o.frequency.value = f;
-    o.detune.value = c + (midi - 60) * 0.18; // a hint of stretch tuning
-    o.connect(lp);
-    o.start(t);
-    o.stop(stopAt);
-  });
-  // felt thump
-  const n = noiseSrc(ctx, sh, t, 0.06);
-  const nf = ctx.createBiquadFilter();
-  nf.type = 'lowpass';
-  nf.frequency.value = 900 + vel * 900;
+  const r = sh.rnd;
+  const f0 = mtof(midi);
+  const B = 0.00028 * Math.pow(2, (midi - 60) / 18);
+  const x0 = 1 / (8.3 + r.next() * 0.4);
+  const T1 = Math.max(0.35, 1.6 - (midi - 48) * 0.025);   // prompt decay, s
+  const T2 = Math.max(1.4, 12 - (midi - 36) * 0.14);        // aftersound, s
+  const rel = t + Math.min(dur, T2) + 0.02;
+  const stopAt = rel + 0.9;
+  const pn = panner(ctx, pan + (midi - 64) * 0.012);
+  const sum = ctx.createGain();
+  sum.gain.value = 0.2;
+  sum.connect(pn).connect(out);
+  const tilt = 1.35 - 0.6 * vel;
+  for (let n = 1; n <= 10; n++) {
+    const fn = n * f0 * Math.sqrt(1 + B * n * n);
+    if (fn > 10000) break;
+    const comb = 0.25 + 0.75 * Math.abs(Math.sin(Math.PI * n * x0));
+    const a = comb * Math.pow(n, -tilt) * vel;
+    if (a < 0.012) continue;
+    const t1 = T1 / (1 + 0.35 * (n - 1));
+    const t2 = T2 / (1 + 0.22 * (n - 1));
+    const addOsc = (freq, amp) => {
+      const o = ctx.createOscillator();
+      o.frequency.value = freq;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(amp, t + 0.0015 + 0.001 * n / 10);
+      g.gain.setTargetAtTime(amp * 0.32, t + 0.003, t1 / 3);
+      g.gain.setTargetAtTime(0, t + t1, t2 / 6.9);
+      g.gain.setTargetAtTime(0, rel, 0.07 + 0.05 / n);
+      o.connect(g).connect(sum);
+      o.start(t);
+      o.stop(stopAt);
+    };
+    addOsc(fn, a);
+    // a second string, a cent or so apart: the slow beating of a real unison
+    if (n <= 2) addOsc(fn * (1 + (0.4 + 0.8 * r.next()) * 5.8e-4 * (r.next() < 0.5 ? -1 : 1)), a * 0.55);
+  }
+  // hammer: felt knock and a short, pitched noise burst
+  const n = noiseSrc(ctx, sh, t, 0.08);
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = Math.min(6000, f0 * 3.2);
+  bp.Q.value = 1.6;
   const ng = ctx.createGain();
-  ng.gain.setValueAtTime(vel * 0.05, t);
-  ng.gain.setTargetAtTime(0, t + 0.003, 0.012);
-  n.connect(nf).connect(ng).connect(pn);
+  ng.gain.setValueAtTime(0.07 * vel * vel, t);
+  ng.gain.setTargetAtTime(0, t + 0.002, 0.008);
+  n.connect(bp).connect(ng).connect(pn);
+  const k = ctx.createOscillator();
+  k.frequency.setValueAtTime(140, t);
+  k.frequency.exponentialRampToValueAtTime(70, t + 0.04);
+  const kg = ctx.createGain();
+  kg.gain.setValueAtTime(0.05 * vel, t);
+  kg.gain.setTargetAtTime(0, t + 0.002, 0.018);
+  k.connect(kg).connect(pn);
+  k.start(t);
+  k.stop(t + 0.3);
 }
 
 // ------------------------------------------------------------------ celesta / music box
+// Struck steel bars over wooden resonators: a strong fundamental with a slow
+// beat (two bars never agree exactly), weak upper modes that die fast, and a
+// small metallic strike.
 export function celesta(ctx, sh, out, t, midi, vel = 0.5, pan = 0) {
+  const r = sh.rnd;
   const f = mtof(midi);
   const pn = panner(ctx, pan);
   pn.connect(out);
-  const parts = [[1, 1, 2.2], [2, 0.12, 0.7], [4.02, 0.22, 0.25], [9.8, 0.05, 0.06]];
+  const parts = [[1, 1, 2.6], [1.0012 + r.next() * 0.001, 0.45, 2.2], [2.0, 0.08, 0.8], [3.93, 0.18, 0.28], [9.9, 0.05, 0.05]];
   parts.forEach(([ratio, amp, dec]) => {
     const o = ctx.createOscillator();
-    o.type = 'sine';
     o.frequency.value = f * ratio;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(vel * amp * 0.3, t + 0.002);
-    g.gain.setTargetAtTime(0, t + 0.002, dec);
+    g.gain.linearRampToValueAtTime(vel * amp * 0.26, t + 0.0015);
+    g.gain.setTargetAtTime(0, t + 0.0015, dec / 2.2);
     o.connect(g).connect(pn);
     o.start(t);
-    o.stop(t + dec * 6 + 0.1);
+    o.stop(t + dec * 3 + 0.1);
   });
+  const n = noiseSrc(ctx, sh, t, 0.03);
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'bandpass';
+  hp.frequency.value = Math.min(9000, f * 6);
+  hp.Q.value = 2.5;
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(vel * 0.05, t);
+  ng.gain.setTargetAtTime(0, t, 0.004);
+  n.connect(hp).connect(ng).connect(pn);
 }
 
 // ------------------------------------------------------------------ marimba / pizzicato
@@ -174,118 +214,163 @@ export function pizz(ctx, sh, out, t, midi, vel = 0.5, pan = 0) {
 }
 
 // ------------------------------------------------------------------ strings ensemble
+// A section of players, each with their own slight detune, entry and
+// vibrato (which starts after the note speaks), through the resonances of a
+// wooden body and a little bow noise.
 export function strings(ctx, sh, out, t, midi, vel = 0.4, dur = 3, pan = 0, attack = 0.6, release = 1.4) {
+  const r = sh.rnd;
   const f = mtof(midi);
   const pn = panner(ctx, pan);
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
-  lp.frequency.value = 1200 + vel * 2600;
-  lp.Q.value = 0.5;
-  const body = ctx.createBiquadFilter();
-  body.type = 'peaking';
-  body.frequency.value = 420;
-  body.gain.value = 3;
+  lp.frequency.value = 1800 + vel * 3200 + f * 0.8;
+  lp.Q.value = 0.3;
+  const b1 = ctx.createBiquadFilter();
+  b1.type = 'peaking'; b1.frequency.value = midi < 55 ? 220 : 380; b1.Q.value = 1.4; b1.gain.value = 4;
+  const b2 = ctx.createBiquadFilter();
+  b2.type = 'peaking'; b2.frequency.value = 1150; b2.Q.value = 1.1; b2.gain.value = -3;
+  const b3 = ctx.createBiquadFilter();
+  b3.type = 'peaking'; b3.frequency.value = 2900; b3.Q.value = 1.3; b3.gain.value = 2.5;
   const g = ctx.createGain();
-  env(g, t, attack, vel * 0.16, 1.2, 0.85, release * 0.4, t + dur);
-  lp.connect(body).connect(g).connect(pn).connect(out);
+  env(g, t, attack, vel * 0.16, 1.2, 0.88, release * 0.4, t + dur);
+  lp.connect(b1).connect(b2).connect(b3).connect(g).connect(pn).connect(out);
   const stopAt = t + dur + release * 2.5;
-  const lfo = ctx.createOscillator();
-  lfo.frequency.value = 4.6 + sh.rnd.next() * 1.2;
-  const lg = ctx.createGain();
-  lg.gain.value = 5 + sh.rnd.next() * 3;
-  lfo.connect(lg);
-  lfo.start(t);
-  lfo.stop(stopAt);
-  for (let k = 0; k < 3; k++) {
+  const players = midi < 50 ? 2 : 3;
+  for (let k = 0; k < players; k++) {
     const o = ctx.createOscillator();
     o.setPeriodicWave(sh.stringWave);
     o.frequency.value = f;
-    o.detune.value = (k - 1) * 9 + (sh.rnd.next() - 0.5) * 4;
-    if (k !== 1) lg.connect(o.detune);
-    o.connect(lp);
+    o.detune.value = (k - (players - 1) / 2) * 5 + (r.next() - 0.5) * 5;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 4.8 + r.next() * 1.4;
+    const lg = ctx.createGain();
+    lg.gain.setValueAtTime(0, t);
+    lg.gain.linearRampToValueAtTime(0, t + 0.2 + r.next() * 0.3);
+    lg.gain.linearRampToValueAtTime(4 + r.next() * 5, t + 0.9 + r.next() * 0.4);
+    lfo.connect(lg).connect(o.detune);
+    const vg = ctx.createGain();
+    const d0 = r.next() * 0.05;
+    vg.gain.setValueAtTime(0, t);
+    vg.gain.linearRampToValueAtTime(1 / players, t + d0 + 0.05);
+    o.connect(vg).connect(lp);
     o.start(t);
+    lfo.start(t);
     o.stop(stopAt);
+    lfo.stop(stopAt);
   }
+  // bow noise, following the envelope
+  const n = noiseSrc(ctx, sh, t, dur + release * 2);
+  const nb = ctx.createBiquadFilter();
+  nb.type = 'bandpass';
+  nb.frequency.value = Math.min(5000, f * 5);
+  nb.Q.value = 1.2;
+  const ng = ctx.createGain();
+  env(ng, t, attack * 0.7, vel * 0.006, 0.5, 0.6, release * 0.4, t + dur);
+  n.connect(nb).connect(ng).connect(pn);
 }
 
 // ------------------------------------------------------------------ cello (the partner)
 export function cello(ctx, sh, out, t, midi, vel = 0.5, dur = 1.5, pan = 0) {
+  const r = sh.rnd;
   const f = mtof(midi);
   const o = ctx.createOscillator();
   o.setPeriodicWave(sh.celloWave);
-  o.frequency.value = f;
+  // the finger lands slightly flat and settles
+  o.frequency.setValueAtTime(f * 0.988, t);
+  o.frequency.setTargetAtTime(f, t, 0.035);
   const lfo = ctx.createOscillator();
-  lfo.frequency.value = 5.2;
+  lfo.frequency.value = 5.3 + r.next() * 0.5;
   const lg = ctx.createGain();
   lg.gain.setValueAtTime(0, t);
-  lg.gain.linearRampToValueAtTime(0, t + 0.25);
-  lg.gain.linearRampToValueAtTime(14, t + 0.7);
+  lg.gain.linearRampToValueAtTime(0, t + 0.3);
+  lg.gain.linearRampToValueAtTime(16, t + 0.9);
   lfo.connect(lg).connect(o.detune);
-  const f1 = ctx.createBiquadFilter();
-  f1.type = 'peaking'; f1.frequency.value = 260; f1.gain.value = 6; f1.Q.value = 1.2;
-  const f2 = ctx.createBiquadFilter();
-  f2.type = 'peaking'; f2.frequency.value = 620; f2.gain.value = 4; f2.Q.value = 1.4;
-  const f3 = ctx.createBiquadFilter();
-  f3.type = 'peaking'; f3.frequency.value = 1250; f3.gain.value = 3; f3.Q.value = 1.6;
+  const peaks = [[110, 5, 1.0], [205, 6, 1.4], [420, 4, 1.6], [1250, 3, 1.4], [2800, -4, 1.0]];
+  let node = o;
+  for (const [fr, gdb, q] of peaks) {
+    const b = ctx.createBiquadFilter();
+    b.type = 'peaking'; b.frequency.value = fr; b.gain.value = gdb; b.Q.value = q;
+    node.connect(b);
+    node = b;
+  }
   const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass'; lp.frequency.value = 2600 + vel * 1500;
+  lp.type = 'lowpass'; lp.frequency.value = 2400 + vel * 1800;
   const g = ctx.createGain();
-  env(g, t, 0.18, vel * 0.2, 0.6, 0.8, 0.25, t + dur);
+  env(g, t, 0.16, vel * 0.2, 0.7, 0.82, 0.22, t + dur);
   const pn = panner(ctx, pan);
-  o.connect(f1).connect(f2).connect(f3).connect(lp).connect(g).connect(pn).connect(out);
+  node.connect(lp).connect(g).connect(pn).connect(out);
   const stopAt = t + dur + 1.5;
   o.start(t); lfo.start(t); o.stop(stopAt); lfo.stop(stopAt);
-  // bow noise
   const n = noiseSrc(ctx, sh, t, dur + 0.5);
   const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass'; bp.frequency.value = f * 3; bp.Q.value = 2;
+  bp.type = 'bandpass'; bp.frequency.value = Math.min(4000, f * 4); bp.Q.value = 1.5;
   const ng = ctx.createGain();
-  env(ng, t, 0.1, vel * 0.012, 0.4, 0.6, 0.2, t + dur);
+  env(ng, t, 0.08, vel * 0.014, 0.35, 0.5, 0.2, t + dur);
   n.connect(bp).connect(ng).connect(pn);
 }
 
 // ------------------------------------------------------------------ glass choir (the AI's voice)
+// Formant synthesis: a glottal source (with vibrato that arrives late and a
+// slow drift) filtered by four vowel formants, breath through the same
+// formants, and a faint pure tone an octave up: a choir that is a little too
+// clean, which is the point.
+const VOWELS = {
+  oo: [[330, 1, 70], [700, 0.35, 80], [2450, 0.12, 120], [3350, 0.06, 140]],
+  ah: [[760, 1, 80], [1180, 0.55, 90], [2800, 0.2, 120], [3800, 0.08, 140]],
+};
 export function choir(ctx, sh, out, t, midi, vel = 0.4, dur = 3, pan = 0, vowel = 0) {
+  const r = sh.rnd;
   const f = mtof(midi);
   const pn = panner(ctx, pan);
   const g = ctx.createGain();
-  env(g, t, 0.9, vel * 0.18, 1.5, 0.9, 0.9, t + dur);
-  // vowel formants: "oo" (vowel 0) to "ah" (vowel 1)
-  const F1 = 330 + vowel * 400, F2 = 850 + vowel * 400;
-  const b1 = ctx.createBiquadFilter();
-  b1.type = 'bandpass'; b1.frequency.value = F1; b1.Q.value = 3;
-  const b2 = ctx.createBiquadFilter();
-  b2.type = 'bandpass'; b2.frequency.value = F2; b2.Q.value = 4;
-  const dry = ctx.createGain();
-  dry.gain.value = 0.35;
-  const mix = ctx.createGain();
-  mix.gain.value = 1.4;
-  b1.connect(mix); b2.connect(mix); dry.connect(mix);
-  mix.connect(g).connect(pn).connect(out);
+  env(g, t, 0.7, vel * 0.5, 1.5, 0.9, 0.9, t + dur);
+  g.connect(pn).connect(out);
+  const bank = ctx.createGain();
+  bank.gain.value = 1;
+  const F = VOWELS.oo.map((a, i) => {
+    const b = VOWELS.ah[i];
+    return [a[0] + (b[0] - a[0]) * vowel, a[1] + (b[1] - a[1]) * vowel, a[2] + (b[2] - a[2]) * vowel];
+  });
+  const src = ctx.createGain();
+  for (const [fr, amp, bw] of F) {
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = fr;
+    bp.Q.value = fr / bw;
+    const ag = ctx.createGain();
+    ag.gain.value = amp * 2.2;
+    src.connect(bp).connect(ag).connect(g);
+  }
   const stopAt = t + dur + 3;
   for (let k = 0; k < 2; k++) {
     const o = ctx.createOscillator();
     o.setPeriodicWave(sh.choirWave);
     o.frequency.value = f;
-    o.detune.value = (k - 0.5) * 8;
+    o.detune.value = (k - 0.5) * 7 + (r.next() - 0.5) * 3;
     const lfo = ctx.createOscillator();
-    lfo.frequency.value = 4.2 + k * 0.37;
+    lfo.frequency.value = 5.0 + r.next() * 0.8;
     const lg = ctx.createGain();
-    lg.gain.value = 9;
+    lg.gain.setValueAtTime(0, t);
+    lg.gain.linearRampToValueAtTime(0, t + 0.5);
+    lg.gain.linearRampToValueAtTime(10 + r.next() * 6, t + 1.4);
     lfo.connect(lg).connect(o.detune);
-    o.connect(b1); o.connect(b2); o.connect(dry);
+    const vg = ctx.createGain();
+    vg.gain.value = 0.5;
+    o.connect(vg).connect(src);
     o.start(t); lfo.start(t); o.stop(stopAt); lfo.stop(stopAt);
   }
-  // glass layer: pure sines beating slowly an octave up
-  [0].forEach((dc) => {
-    const o = ctx.createOscillator();
-    o.frequency.value = f * 2;
-    o.detune.value = dc;
-    const gg = ctx.createGain();
-    env(gg, t, 1.2, vel * 0.03, 2, 0.9, 1.2, t + dur);
-    o.connect(gg).connect(pn);
-    o.start(t); o.stop(stopAt);
-  });
+  // breath
+  const n = noiseSrc(ctx, sh, t, dur + 2, sh.pink);
+  const ng = ctx.createGain();
+  ng.gain.value = 0.06;
+  n.connect(ng).connect(src);
+  // the glass: a faint pure tone an octave up
+  const gl = ctx.createOscillator();
+  gl.frequency.value = f * 2;
+  const gg = ctx.createGain();
+  env(gg, t, 1.2, vel * 0.02, 2, 0.9, 1.2, t + dur);
+  gl.connect(gg).connect(pn);
+  gl.start(t); gl.stop(stopAt);
 }
 
 // ------------------------------------------------------------------ bells (the AI counting)
@@ -515,23 +600,32 @@ export function drip(ctx, sh, out, t, vel = 0.3, pan = 0) {
   o.start(t); o.stop(t + 0.4);
 }
 
-// procedural stereo impulse response: decaying noise that darkens with time
+// procedural stereo impulse response: pre-delay, a cluster of early
+// reflections, then a dense tail whose high frequencies die first
 export function makeIR(ctx, seconds = 4, seed = 7) {
   const sr = ctx.sampleRate;
   const len = Math.round(sr * seconds);
   const ir = ctx.createBuffer(2, len, sr);
   const r = rng(seed);
+  const pre = Math.round(0.014 * sr);
+  const taps = Array.from({ length: 14 }, () => [0.004 + r.next() * 0.075, (0.5 + r.next() * 0.5) * 0.7]);
   for (let ch = 0; ch < 2; ch++) {
     const d = ir.getChannelData(ch);
-    let lp = 0;
-    for (let i = 0; i < len; i++) {
-      const tt = i / sr;
-      const decay = Math.exp(-tt * (6.9 / seconds));
-      // damping: a one-pole lowpass closing over time
-      const a = Math.min(0.97, 0.15 + tt * 0.35);
-      lp = lp * a + (r.next() * 2 - 1) * (1 - a);
-      const early = tt < 0.08 ? (r.next() < 0.004 ? (r.next() * 2 - 1) * 3 : 0) : 0;
-      d[i] = (lp * 2.2 + early) * decay * (tt < 0.02 ? tt / 0.02 : 1);
+    // tail: three bands of noise with their own decay, summed
+    let l1 = 0, l2 = 0;
+    for (let i = pre; i < len; i++) {
+      const tt = (i - pre) / sr;
+      const w = r.next() * 2 - 1;
+      l1 += (w - l1) * 0.08;             // low band
+      l2 += (w - l2) * 0.35;             // low-mid band
+      const hi = w - l2, mid = l2 - l1, lo = l1;
+      const env = (a) => Math.exp(-tt * 6.9 / a);
+      const build = Math.min(1, tt / 0.06);
+      d[i] = (lo * 1.6 * env(seconds) + mid * 1.1 * env(seconds * 0.8) + hi * 0.55 * env(seconds * 0.42)) * build;
+    }
+    for (const [dt, a] of taps) {
+      const i = pre + Math.round((dt + (ch ? 0.0007 : 0)) * sr);
+      if (i < len) d[i] += a * (ch ? (r.next() < 0.5 ? -1 : 1) : 1) * (1 - dt * 8);
     }
   }
   return ir;

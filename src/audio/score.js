@@ -1,7 +1,7 @@
 // THE SCORE of HELD, generated from the same cue table as the picture.
 // Key E♭ major (loss in C minor), 3/4; see PLAN.md §4.5.
 import * as S from './synth.js';
-import { PHRASE_A, PHRASE_B, placePhrase } from './theme.js';
+import { PHRASE_A, PHRASE_B, placePhrase, perform } from './theme.js';
 import { C, BEATS, heartGain, DURATION, faderDb } from '../film/cues.js';
 import { rng } from '../rng.js';
 
@@ -37,8 +37,8 @@ export function filmScore() {
   // ------------------------------------------------ I · quickening: the lullaby
   {
     const bpm = 72, t0 = C.lullaby[0];
-    const notes = [...placePhrase(PHRASE_A, t0, bpm), ...placePhrase(PHRASE_B, t0 + 12 * spb(bpm), bpm)];
-    notes.forEach((n, i) => E(n.t, (c, sh, B) => S.celesta(c, sh, B.celesta, n.t, n.midi + 12, 0.5 + 0.1 * Math.sin(i), 0.12)));
+    const notes = [...perform(placePhrase(PHRASE_A, t0, bpm), r, { vel: 0.5, swell: 0.3, bpm }), ...perform(placePhrase(PHRASE_B, t0 + 12 * spb(bpm), bpm), r, { vel: 0.52, swell: 0.3, bpm, rit: 0.02 })];
+    notes.forEach((n) => E(n.t, (c, sh, B) => S.celesta(c, sh, B.celesta, n.t, n.midi + 12, n.vel, 0.12)));
     const harm = [CH.Eb, CH.Abmaj7, CH.Fm7, CH.Bb, CH.Eb, CH.Ab, CH.Bb7, CH.Eb];
     harm.forEach((ch, bar) => {
       const t = t0 + bar * 3 * spb(bpm);
@@ -110,7 +110,7 @@ export function filmScore() {
     const bpm = 80, t0 = C.loveMeet + 0.3, b = spb(bpm);
     E(C.loveMeet - 0.4, (c, sh, B) => S.drone(c, sh, B.low, C.loveMeet - 0.4, 39, 0.3, 4, 1.2, 2));
     [63, 67, 70, 74, 77, 79, 82, 86].forEach((m, i) => E(C.loveMeet + i * 0.06, (c, sh, B) => S.celesta(c, sh, B.celesta, C.loveMeet + i * 0.06, m, 0.3 + i * 0.03, (i - 4) * 0.12)));
-    placePhrase(PHRASE_A, t0, bpm).forEach((n) => E(n.t, (c, sh, B) => S.piano(c, sh, B.piano, n.t, n.midi, 0.62, n.dur * 1.1, 0.12)));
+    perform(placePhrase(PHRASE_A, t0, bpm), r, { vel: 0.62, swell: 0.3, pedal: true, bpm, rit: 0.015 }).forEach((n) => E(n.t, (c, sh, B) => S.piano(c, sh, B.piano, n.t, n.midi, n.vel, n.dur, 0.12)));
     // the partner's voice: a countermelody below
     const counter = [[67, 2], [68, 1], [70, 3], [68, 2], [67, 1], [65, 3], [63, 2], [65, 1], [67, 2], [70, 1]];
     let bt = 0;
@@ -134,8 +134,8 @@ export function filmScore() {
   {
     const t0 = C.allAtOnce[0];
     CH.AbLyd.forEach((m, i) => {
-      E(t0, (c, sh, B) => S.strings(c, sh, B.strings, t0, m, 0.11, 7.5, (i - 2) * 0.35, 2.5, 2.5));
-      E(t0 + 0.5, (c, sh, B) => S.choir(c, sh, B.choir, t0 + 0.5, m + 12, 0.08, 7, (i - 2) * 0.3, 0.4));
+      E(t0, (c, sh, B) => S.strings(c, sh, B.strings, t0, m, 0.11, 7.5, (i - 2) * 0.35, 2.5, 2.5), true);
+      E(t0 + 0.5, (c, sh, B) => S.choir(c, sh, B.choir, t0 + 0.5, m + 12, 0.08, 7, (i - 2) * 0.3, 0.4), true);
     });
     E(t0, (c, sh, B) => S.whoosh(c, sh, B.air, t0, 2.8, 0.25, 3000, 400, 0));
     const aiA = [[70, 1.2], [79, 1.8], [77, 1.1], [75, 2.2]];
@@ -152,13 +152,13 @@ export function filmScore() {
   {
     const bpm = 72, t0 = C.loss[0] - 0.4, b = spb(bpm);
     const phraseMinor = [[67, 1], [75, 1.5], [74, 0.5], [72, 1], [71, 1], [72, 1], [74, 1.5], [75, 0.5], [74, 1], [67, 3]];
-    placePhrase(phraseMinor, t0, bpm).forEach((n) => E(n.t, (c, sh, B) => S.piano(c, sh, B.piano, n.t, n.midi, 0.5, n.dur * 1.1, 0.1)));
+    perform(placePhrase(phraseMinor, t0, bpm), r, { vel: 0.5, swell: 0.25, pedal: true, bpm, rit: 0.02 }).forEach((n) => E(n.t, (c, sh, B) => S.piano(c, sh, B.piano, n.t, n.midi, n.vel, n.dur, 0.1)));
     // the partner begins phrase B and is cut off
     const cutAt = C.partnerFray + 0.7;
-    placePhrase(PHRASE_B, t0, bpm).forEach((n) => {
+    perform(placePhrase(PHRASE_B, t0, bpm), r, { vel: 0.55, swell: 0.3, bpm, jitter: 0.02 }).forEach((n) => {
       if (n.t >= cutAt) return;
       const dur = Math.min(n.dur, cutAt - n.t);
-      E(n.t, (c, sh, B) => S.cello(c, sh, B.cello, n.t, n.midi - 12, 0.5, dur, -0.3));
+      E(n.t, (c, sh, B) => S.cello(c, sh, B.cello, n.t, n.midi - 12, n.vel, dur, -0.3));
     });
     [CH.Cm, CH.Ab, CH.EbBb, CH.G7].forEach((ch, bar) => {
       const t = t0 + bar * 3 * b;
@@ -239,8 +239,8 @@ export function filmScore() {
       E(t, (c, sh, B) => S.strings(c, sh, B.strings, t, m, 0.3, 0.3, 0.1, 0.05, 0.4));
     });
     const tr = C.beadForm;
-    [39, 51, 58, 63, 67, 70, 75, 79].forEach((m, i) => E(tr, (c, sh, B) => S.strings(c, sh, B.strings, tr, m, 0.34, 4.8, (i - 3.5) * 0.25, 0.08, 2.2)));
-    [63, 67, 70, 75].forEach((m, i) => E(tr, (c, sh, B) => S.choir(c, sh, B.choir, tr, m, 0.3, 5.0, (i - 1.5) * 0.3, 0.85)));
+    [39, 51, 58, 63, 67, 70, 75, 79].forEach((m, i) => E(tr, (c, sh, B) => S.strings(c, sh, B.strings, tr, m, 0.34, 4.8, (i - 3.5) * 0.25, 0.08, 2.2), true));
+    [63, 67, 70, 75].forEach((m, i) => E(tr, (c, sh, B) => S.choir(c, sh, B.choir, tr, m, 0.3, 5.0, (i - 1.5) * 0.3, 0.85), true));
     E(tr, (c, sh, B) => {
       S.piano(c, sh, B.piano, tr, 75, 0.85, 5, 0);
       S.piano(c, sh, B.piano, tr, 63, 0.6, 5, -0.1);

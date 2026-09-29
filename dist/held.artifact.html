@@ -4483,14 +4483,16 @@ void animate(inout Dab d) {
       const s = a.reduce((x, y) => x + y, 0);
       return a.map((x) => x / s);
     };
+    const bowAmps = Array.from({ length: 48 }, (_, i) => 1 / (i + 1) * Math.exp(-(i + 1) / 26));
+    const glotAmps = Array.from({ length: 40 }, (_, i) => Math.pow(i + 1, -1.25) * (i >= 1 && i <= 3 ? 1.15 : 1));
     return {
       noise,
       pink,
       rnd: r,
       pianoWave: wave(norm2(pianoAmps)),
-      stringWave: wave(norm2(Array.from({ length: 24 }, (_, i) => 1 / (i + 1)))),
-      celloWave: wave(norm2(Array.from({ length: 20 }, (_, i) => 1 / (i + 1) * (i % 2 === 0 ? 1 : 0.55)))),
-      choirWave: wave(norm2([1, 0.28, 0.12, 0.05, 0.02]))
+      stringWave: wave(norm2(bowAmps)),
+      celloWave: wave(norm2(Array.from({ length: 36 }, (_, i) => 1 / (i + 1) * Math.exp(-(i + 1) / 20) * (i % 2 === 0 ? 1 : 0.7)))),
+      choirWave: wave(norm2(glotAmps))
     };
   }
   function env(g, t, a, peak, d, sustain, rel, end) {
@@ -4514,60 +4516,88 @@ void animate(inout Dab d) {
     return p;
   }
   function piano(ctx, sh, out, t, midi, vel = 0.6, dur = 1.5, pan = 0) {
-    const f = mtof(midi);
-    const decay = Math.max(1.2, 9 - (midi - 36) * 0.09);
-    const end = t + Math.min(dur, decay) + 0.05;
-    const stopAt = end + 1.6;
-    const lp = ctx.createBiquadFilter();
-    lp.type = "lowpass";
-    lp.Q.value = 0.4;
-    const bright = 900 + vel * 3800 + f * 1.5;
-    lp.frequency.setValueAtTime(bright, t);
-    lp.frequency.setTargetAtTime(500 + f * 1.2, t + 0.01, 0.35 + (1 - vel) * 0.2);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(vel * 0.42, t + 4e-3);
-    g.gain.setTargetAtTime(vel * 0.2, t + 4e-3, 0.25);
-    g.gain.setTargetAtTime(1e-4, t + 0.5, decay * 0.35);
-    g.gain.setTargetAtTime(0, end, 0.18);
-    const pn = panner(ctx, pan);
-    lp.connect(g).connect(pn).connect(out);
-    const det = [-2.2, 0.4, 2.6];
-    det.forEach((c) => {
-      const o = ctx.createOscillator();
-      o.setPeriodicWave(sh.pianoWave);
-      o.frequency.value = f;
-      o.detune.value = c + (midi - 60) * 0.18;
-      o.connect(lp);
-      o.start(t);
-      o.stop(stopAt);
-    });
-    const n = noiseSrc(ctx, sh, t, 0.06);
-    const nf = ctx.createBiquadFilter();
-    nf.type = "lowpass";
-    nf.frequency.value = 900 + vel * 900;
+    const r = sh.rnd;
+    const f0 = mtof(midi);
+    const B = 28e-5 * Math.pow(2, (midi - 60) / 18);
+    const x0 = 1 / (8.3 + r.next() * 0.4);
+    const T1 = Math.max(0.35, 1.6 - (midi - 48) * 0.025);
+    const T2 = Math.max(1.4, 12 - (midi - 36) * 0.14);
+    const rel = t + Math.min(dur, T2) + 0.02;
+    const stopAt = rel + 0.9;
+    const pn = panner(ctx, pan + (midi - 64) * 0.012);
+    const sum = ctx.createGain();
+    sum.gain.value = 0.2;
+    sum.connect(pn).connect(out);
+    const tilt = 1.35 - 0.6 * vel;
+    for (let n2 = 1; n2 <= 10; n2++) {
+      const fn = n2 * f0 * Math.sqrt(1 + B * n2 * n2);
+      if (fn > 1e4) break;
+      const comb = 0.25 + 0.75 * Math.abs(Math.sin(Math.PI * n2 * x0));
+      const a = comb * Math.pow(n2, -tilt) * vel;
+      if (a < 0.012) continue;
+      const t1 = T1 / (1 + 0.35 * (n2 - 1));
+      const t2 = T2 / (1 + 0.22 * (n2 - 1));
+      const addOsc = (freq, amp) => {
+        const o = ctx.createOscillator();
+        o.frequency.value = freq;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(amp, t + 15e-4 + 1e-3 * n2 / 10);
+        g.gain.setTargetAtTime(amp * 0.32, t + 3e-3, t1 / 3);
+        g.gain.setTargetAtTime(0, t + t1, t2 / 6.9);
+        g.gain.setTargetAtTime(0, rel, 0.07 + 0.05 / n2);
+        o.connect(g).connect(sum);
+        o.start(t);
+        o.stop(stopAt);
+      };
+      addOsc(fn, a);
+      if (n2 <= 2) addOsc(fn * (1 + (0.4 + 0.8 * r.next()) * 58e-5 * (r.next() < 0.5 ? -1 : 1)), a * 0.55);
+    }
+    const n = noiseSrc(ctx, sh, t, 0.08);
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = Math.min(6e3, f0 * 3.2);
+    bp.Q.value = 1.6;
     const ng = ctx.createGain();
-    ng.gain.setValueAtTime(vel * 0.05, t);
-    ng.gain.setTargetAtTime(0, t + 3e-3, 0.012);
-    n.connect(nf).connect(ng).connect(pn);
+    ng.gain.setValueAtTime(0.07 * vel * vel, t);
+    ng.gain.setTargetAtTime(0, t + 2e-3, 8e-3);
+    n.connect(bp).connect(ng).connect(pn);
+    const k = ctx.createOscillator();
+    k.frequency.setValueAtTime(140, t);
+    k.frequency.exponentialRampToValueAtTime(70, t + 0.04);
+    const kg = ctx.createGain();
+    kg.gain.setValueAtTime(0.05 * vel, t);
+    kg.gain.setTargetAtTime(0, t + 2e-3, 0.018);
+    k.connect(kg).connect(pn);
+    k.start(t);
+    k.stop(t + 0.3);
   }
   function celesta(ctx, sh, out, t, midi, vel = 0.5, pan = 0) {
+    const r = sh.rnd;
     const f = mtof(midi);
     const pn = panner(ctx, pan);
     pn.connect(out);
-    const parts = [[1, 1, 2.2], [2, 0.12, 0.7], [4.02, 0.22, 0.25], [9.8, 0.05, 0.06]];
+    const parts = [[1, 1, 2.6], [1.0012 + r.next() * 1e-3, 0.45, 2.2], [2, 0.08, 0.8], [3.93, 0.18, 0.28], [9.9, 0.05, 0.05]];
     parts.forEach(([ratio, amp, dec]) => {
       const o = ctx.createOscillator();
-      o.type = "sine";
       o.frequency.value = f * ratio;
       const g = ctx.createGain();
       g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(vel * amp * 0.3, t + 2e-3);
-      g.gain.setTargetAtTime(0, t + 2e-3, dec);
+      g.gain.linearRampToValueAtTime(vel * amp * 0.26, t + 15e-4);
+      g.gain.setTargetAtTime(0, t + 15e-4, dec / 2.2);
       o.connect(g).connect(pn);
       o.start(t);
-      o.stop(t + dec * 6 + 0.1);
+      o.stop(t + dec * 3 + 0.1);
     });
+    const n = noiseSrc(ctx, sh, t, 0.03);
+    const hp = ctx.createBiquadFilter();
+    hp.type = "bandpass";
+    hp.frequency.value = Math.min(9e3, f * 6);
+    hp.Q.value = 2.5;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(vel * 0.05, t);
+    ng.gain.setTargetAtTime(0, t, 4e-3);
+    n.connect(hp).connect(ng).connect(pn);
   }
   function marimba(ctx, sh, out, t, midi, vel = 0.5, pan = 0) {
     const f = mtof(midi);
@@ -4603,72 +4633,96 @@ void animate(inout Dab d) {
     o.stop(t + 1.2);
   }
   function strings(ctx, sh, out, t, midi, vel = 0.4, dur = 3, pan = 0, attack = 0.6, release = 1.4) {
+    const r = sh.rnd;
     const f = mtof(midi);
     const pn = panner(ctx, pan);
     const lp = ctx.createBiquadFilter();
     lp.type = "lowpass";
-    lp.frequency.value = 1200 + vel * 2600;
-    lp.Q.value = 0.5;
-    const body = ctx.createBiquadFilter();
-    body.type = "peaking";
-    body.frequency.value = 420;
-    body.gain.value = 3;
+    lp.frequency.value = 1800 + vel * 3200 + f * 0.8;
+    lp.Q.value = 0.3;
+    const b1 = ctx.createBiquadFilter();
+    b1.type = "peaking";
+    b1.frequency.value = midi < 55 ? 220 : 380;
+    b1.Q.value = 1.4;
+    b1.gain.value = 4;
+    const b2 = ctx.createBiquadFilter();
+    b2.type = "peaking";
+    b2.frequency.value = 1150;
+    b2.Q.value = 1.1;
+    b2.gain.value = -3;
+    const b3 = ctx.createBiquadFilter();
+    b3.type = "peaking";
+    b3.frequency.value = 2900;
+    b3.Q.value = 1.3;
+    b3.gain.value = 2.5;
     const g = ctx.createGain();
-    env(g, t, attack, vel * 0.16, 1.2, 0.85, release * 0.4, t + dur);
-    lp.connect(body).connect(g).connect(pn).connect(out);
+    env(g, t, attack, vel * 0.16, 1.2, 0.88, release * 0.4, t + dur);
+    lp.connect(b1).connect(b2).connect(b3).connect(g).connect(pn).connect(out);
     const stopAt = t + dur + release * 2.5;
-    const lfo = ctx.createOscillator();
-    lfo.frequency.value = 4.6 + sh.rnd.next() * 1.2;
-    const lg = ctx.createGain();
-    lg.gain.value = 5 + sh.rnd.next() * 3;
-    lfo.connect(lg);
-    lfo.start(t);
-    lfo.stop(stopAt);
-    for (let k = 0; k < 3; k++) {
+    const players = midi < 50 ? 2 : 3;
+    for (let k = 0; k < players; k++) {
       const o = ctx.createOscillator();
       o.setPeriodicWave(sh.stringWave);
       o.frequency.value = f;
-      o.detune.value = (k - 1) * 9 + (sh.rnd.next() - 0.5) * 4;
-      if (k !== 1) lg.connect(o.detune);
-      o.connect(lp);
+      o.detune.value = (k - (players - 1) / 2) * 5 + (r.next() - 0.5) * 5;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 4.8 + r.next() * 1.4;
+      const lg = ctx.createGain();
+      lg.gain.setValueAtTime(0, t);
+      lg.gain.linearRampToValueAtTime(0, t + 0.2 + r.next() * 0.3);
+      lg.gain.linearRampToValueAtTime(4 + r.next() * 5, t + 0.9 + r.next() * 0.4);
+      lfo.connect(lg).connect(o.detune);
+      const vg = ctx.createGain();
+      const d0 = r.next() * 0.05;
+      vg.gain.setValueAtTime(0, t);
+      vg.gain.linearRampToValueAtTime(1 / players, t + d0 + 0.05);
+      o.connect(vg).connect(lp);
       o.start(t);
+      lfo.start(t);
       o.stop(stopAt);
+      lfo.stop(stopAt);
     }
+    const n = noiseSrc(ctx, sh, t, dur + release * 2);
+    const nb = ctx.createBiquadFilter();
+    nb.type = "bandpass";
+    nb.frequency.value = Math.min(5e3, f * 5);
+    nb.Q.value = 1.2;
+    const ng = ctx.createGain();
+    env(ng, t, attack * 0.7, vel * 6e-3, 0.5, 0.6, release * 0.4, t + dur);
+    n.connect(nb).connect(ng).connect(pn);
   }
   function cello(ctx, sh, out, t, midi, vel = 0.5, dur = 1.5, pan = 0) {
+    const r = sh.rnd;
     const f = mtof(midi);
     const o = ctx.createOscillator();
     o.setPeriodicWave(sh.celloWave);
-    o.frequency.value = f;
+    o.frequency.setValueAtTime(f * 0.988, t);
+    o.frequency.setTargetAtTime(f, t, 0.035);
     const lfo = ctx.createOscillator();
-    lfo.frequency.value = 5.2;
+    lfo.frequency.value = 5.3 + r.next() * 0.5;
     const lg = ctx.createGain();
     lg.gain.setValueAtTime(0, t);
-    lg.gain.linearRampToValueAtTime(0, t + 0.25);
-    lg.gain.linearRampToValueAtTime(14, t + 0.7);
+    lg.gain.linearRampToValueAtTime(0, t + 0.3);
+    lg.gain.linearRampToValueAtTime(16, t + 0.9);
     lfo.connect(lg).connect(o.detune);
-    const f1 = ctx.createBiquadFilter();
-    f1.type = "peaking";
-    f1.frequency.value = 260;
-    f1.gain.value = 6;
-    f1.Q.value = 1.2;
-    const f2 = ctx.createBiquadFilter();
-    f2.type = "peaking";
-    f2.frequency.value = 620;
-    f2.gain.value = 4;
-    f2.Q.value = 1.4;
-    const f3 = ctx.createBiquadFilter();
-    f3.type = "peaking";
-    f3.frequency.value = 1250;
-    f3.gain.value = 3;
-    f3.Q.value = 1.6;
+    const peaks = [[110, 5, 1], [205, 6, 1.4], [420, 4, 1.6], [1250, 3, 1.4], [2800, -4, 1]];
+    let node = o;
+    for (const [fr, gdb, q] of peaks) {
+      const b = ctx.createBiquadFilter();
+      b.type = "peaking";
+      b.frequency.value = fr;
+      b.gain.value = gdb;
+      b.Q.value = q;
+      node.connect(b);
+      node = b;
+    }
     const lp = ctx.createBiquadFilter();
     lp.type = "lowpass";
-    lp.frequency.value = 2600 + vel * 1500;
+    lp.frequency.value = 2400 + vel * 1800;
     const g = ctx.createGain();
-    env(g, t, 0.18, vel * 0.2, 0.6, 0.8, 0.25, t + dur);
+    env(g, t, 0.16, vel * 0.2, 0.7, 0.82, 0.22, t + dur);
     const pn = panner(ctx, pan);
-    o.connect(f1).connect(f2).connect(f3).connect(lp).connect(g).connect(pn).connect(out);
+    node.connect(lp).connect(g).connect(pn).connect(out);
     const stopAt = t + dur + 1.5;
     o.start(t);
     lfo.start(t);
@@ -4677,63 +4731,71 @@ void animate(inout Dab d) {
     const n = noiseSrc(ctx, sh, t, dur + 0.5);
     const bp = ctx.createBiquadFilter();
     bp.type = "bandpass";
-    bp.frequency.value = f * 3;
-    bp.Q.value = 2;
+    bp.frequency.value = Math.min(4e3, f * 4);
+    bp.Q.value = 1.5;
     const ng = ctx.createGain();
-    env(ng, t, 0.1, vel * 0.012, 0.4, 0.6, 0.2, t + dur);
+    env(ng, t, 0.08, vel * 0.014, 0.35, 0.5, 0.2, t + dur);
     n.connect(bp).connect(ng).connect(pn);
   }
+  var VOWELS = {
+    oo: [[330, 1, 70], [700, 0.35, 80], [2450, 0.12, 120], [3350, 0.06, 140]],
+    ah: [[760, 1, 80], [1180, 0.55, 90], [2800, 0.2, 120], [3800, 0.08, 140]]
+  };
   function choir(ctx, sh, out, t, midi, vel = 0.4, dur = 3, pan = 0, vowel = 0) {
+    const r = sh.rnd;
     const f = mtof(midi);
     const pn = panner(ctx, pan);
     const g = ctx.createGain();
-    env(g, t, 0.9, vel * 0.18, 1.5, 0.9, 0.9, t + dur);
-    const F1 = 330 + vowel * 400, F2 = 850 + vowel * 400;
-    const b1 = ctx.createBiquadFilter();
-    b1.type = "bandpass";
-    b1.frequency.value = F1;
-    b1.Q.value = 3;
-    const b2 = ctx.createBiquadFilter();
-    b2.type = "bandpass";
-    b2.frequency.value = F2;
-    b2.Q.value = 4;
-    const dry = ctx.createGain();
-    dry.gain.value = 0.35;
-    const mix = ctx.createGain();
-    mix.gain.value = 1.4;
-    b1.connect(mix);
-    b2.connect(mix);
-    dry.connect(mix);
-    mix.connect(g).connect(pn).connect(out);
+    env(g, t, 0.7, vel * 0.5, 1.5, 0.9, 0.9, t + dur);
+    g.connect(pn).connect(out);
+    const bank = ctx.createGain();
+    bank.gain.value = 1;
+    const F2 = VOWELS.oo.map((a, i) => {
+      const b = VOWELS.ah[i];
+      return [a[0] + (b[0] - a[0]) * vowel, a[1] + (b[1] - a[1]) * vowel, a[2] + (b[2] - a[2]) * vowel];
+    });
+    const src = ctx.createGain();
+    for (const [fr, amp, bw] of F2) {
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = fr;
+      bp.Q.value = fr / bw;
+      const ag = ctx.createGain();
+      ag.gain.value = amp * 2.2;
+      src.connect(bp).connect(ag).connect(g);
+    }
     const stopAt = t + dur + 3;
     for (let k = 0; k < 2; k++) {
       const o = ctx.createOscillator();
       o.setPeriodicWave(sh.choirWave);
       o.frequency.value = f;
-      o.detune.value = (k - 0.5) * 8;
+      o.detune.value = (k - 0.5) * 7 + (r.next() - 0.5) * 3;
       const lfo = ctx.createOscillator();
-      lfo.frequency.value = 4.2 + k * 0.37;
+      lfo.frequency.value = 5 + r.next() * 0.8;
       const lg = ctx.createGain();
-      lg.gain.value = 9;
+      lg.gain.setValueAtTime(0, t);
+      lg.gain.linearRampToValueAtTime(0, t + 0.5);
+      lg.gain.linearRampToValueAtTime(10 + r.next() * 6, t + 1.4);
       lfo.connect(lg).connect(o.detune);
-      o.connect(b1);
-      o.connect(b2);
-      o.connect(dry);
+      const vg = ctx.createGain();
+      vg.gain.value = 0.5;
+      o.connect(vg).connect(src);
       o.start(t);
       lfo.start(t);
       o.stop(stopAt);
       lfo.stop(stopAt);
     }
-    [0].forEach((dc) => {
-      const o = ctx.createOscillator();
-      o.frequency.value = f * 2;
-      o.detune.value = dc;
-      const gg = ctx.createGain();
-      env(gg, t, 1.2, vel * 0.03, 2, 0.9, 1.2, t + dur);
-      o.connect(gg).connect(pn);
-      o.start(t);
-      o.stop(stopAt);
-    });
+    const n = noiseSrc(ctx, sh, t, dur + 2, sh.pink);
+    const ng = ctx.createGain();
+    ng.gain.value = 0.06;
+    n.connect(ng).connect(src);
+    const gl = ctx.createOscillator();
+    gl.frequency.value = f * 2;
+    const gg = ctx.createGain();
+    env(gg, t, 1.2, vel * 0.02, 2, 0.9, 1.2, t + dur);
+    gl.connect(gg).connect(pn);
+    gl.start(t);
+    gl.stop(stopAt);
   }
   function bell(ctx, sh, out, t, midi, vel = 0.5, pan = 0, length = 1) {
     const f = mtof(midi);
@@ -4965,16 +5027,24 @@ void animate(inout Dab d) {
     const len = Math.round(sr * seconds);
     const ir = ctx.createBuffer(2, len, sr);
     const r = rng(seed);
+    const pre = Math.round(0.014 * sr);
+    const taps = Array.from({ length: 14 }, () => [4e-3 + r.next() * 0.075, (0.5 + r.next() * 0.5) * 0.7]);
     for (let ch = 0; ch < 2; ch++) {
       const d = ir.getChannelData(ch);
-      let lp = 0;
-      for (let i = 0; i < len; i++) {
-        const tt = i / sr;
-        const decay = Math.exp(-tt * (6.9 / seconds));
-        const a = Math.min(0.97, 0.15 + tt * 0.35);
-        lp = lp * a + (r.next() * 2 - 1) * (1 - a);
-        const early = tt < 0.08 ? r.next() < 4e-3 ? (r.next() * 2 - 1) * 3 : 0 : 0;
-        d[i] = (lp * 2.2 + early) * decay * (tt < 0.02 ? tt / 0.02 : 1);
+      let l1 = 0, l2 = 0;
+      for (let i = pre; i < len; i++) {
+        const tt = (i - pre) / sr;
+        const w = r.next() * 2 - 1;
+        l1 += (w - l1) * 0.08;
+        l2 += (w - l2) * 0.35;
+        const hi = w - l2, mid = l2 - l1, lo = l1;
+        const env2 = (a) => Math.exp(-tt * 6.9 / a);
+        const build = Math.min(1, tt / 0.06);
+        d[i] = (lo * 1.6 * env2(seconds) + mid * 1.1 * env2(seconds * 0.8) + hi * 0.55 * env2(seconds * 0.42)) * build;
+      }
+      for (const [dt, a] of taps) {
+        const i = pre + Math.round((dt + (ch ? 7e-4 : 0)) * sr);
+        if (i < len) d[i] += a * (ch ? r.next() < 0.5 ? -1 : 1 : 1) * (1 - dt * 8);
       }
     }
     return ir;
@@ -5164,22 +5234,34 @@ void animate(inout Dab d) {
     s2.connect(merger, 0, 2);
     s2.connect(merger, 1, 3);
     merger.connect(ctx.destination);
-    const bus = (dry, rev, dryGain, sendGain) => {
+    const bus = (dry, rev, dryGain, sendGain, eq = null) => {
       const g = ctx.createGain();
+      let head = g;
+      if (eq) {
+        for (const [type, freq, gain, q] of eq) {
+          const f = ctx.createBiquadFilter();
+          f.type = type;
+          f.frequency.value = freq;
+          f.gain.value = gain;
+          f.Q.value = q ?? 0.7;
+          head.connect(f);
+          head = f;
+        }
+      }
       const d = ctx.createGain();
       d.gain.value = dryGain;
       const s = ctx.createGain();
       s.gain.value = sendGain;
-      g.connect(d).connect(dry);
-      g.connect(s).connect(rev);
+      head.connect(d).connect(dry);
+      head.connect(s).connect(rev);
       return g;
     };
     const B = {
-      piano: bus(musicDry, musicRev, 0.85, 0.32),
+      piano: bus(musicDry, musicRev, 0.85, 0.34, [["peaking", 170, 2.5, 0.9], ["peaking", 3200, 1.5, 1], ["highshelf", 7500, -3, 0.7]]),
       celesta: bus(musicDry, musicRev, 0.7, 0.5),
-      strings: bus(musicDry, musicRev, 0.75, 0.45),
+      strings: bus(musicDry, musicRev, 0.7, 0.5, [["highshelf", 8e3, -4, 0.7]]),
       cello: bus(musicDry, musicRev, 0.8, 0.35),
-      choir: bus(musicDry, musicRev, 0.55, 0.7),
+      choir: bus(musicDry, musicRev, 0.5, 0.75, [["highpass", 120, 0, 0.7]]),
       bells: bus(musicDry, musicRev, 0.6, 0.6),
       low: bus(musicDry, musicRev, 0.9, 0.2),
       heart: bus(sfxDry, sfxRev, 0.95, 0.12),
@@ -5192,21 +5274,33 @@ void animate(inout Dab d) {
     const len = Math.ceil((t1 - origin) * sr);
     const ctx = new OfflineAudioContext(4, len, sr);
     const { sh, B } = makeGraph(ctx);
-    for (const e of events) {
-      sh.rnd = rng(7919 * (e.id + 1));
-      e.fn(ctx, sh, B, origin);
+    const evs = events.slice().sort((a, b) => a.t - b.t);
+    let k = 0;
+    const AHEAD = 0.4, STEP = 1;
+    const schedule = (until) => {
+      while (k < evs.length && evs[k].t - origin < until) {
+        sh.rnd = rng(7919 * (evs[k].id + 1));
+        evs[k].fn(ctx, sh, B);
+        k++;
+      }
+    };
+    schedule(STEP + AHEAD);
+    const dur = t1 - origin;
+    for (let t = STEP; t < dur; t += STEP) {
+      const tt = t;
+      ctx.suspend(tt).then(() => {
+        schedule(tt + STEP + AHEAD);
+        if (progress) progress(tt / dur);
+        ctx.resume();
+      });
     }
-    if (progress) for (let t = 2; t < t1 - origin; t += 2) ctx.suspend(t).then(() => {
-      progress(t / (t1 - origin));
-      ctx.resume();
-    });
     return ctx.startRendering();
   }
   async function renderScore(score, { duration, sr = 48e3, onProgress = null, withStems = false, chunks = null } = {}) {
     const len = Math.ceil(duration * sr);
     const events = score.events.map((e, i) => ({ ...e, id: i })).sort((a, b) => a.t - b.t);
     const K3 = chunks ?? Math.max(2, Math.min(8, typeof navigator !== "undefined" && navigator.hardwareConcurrency || 4));
-    const PRE = 10;
+    const PRE = 12;
     const jobs = [];
     const prog2 = new Float32Array(K3 + 1);
     const report = () => onProgress && onProgress(prog2.reduce((a, b) => a + b, 0) / (K3 + 1));
@@ -5214,17 +5308,19 @@ void animate(inout Dab d) {
     for (let k = 0; k < K3; k++) {
       const a = bounds[k], b = bounds[k + 1];
       const origin = Math.max(0, a - PRE);
-      const evs = events.filter((e) => !e.long && e.t >= origin && e.t < b).map((e) => ({ id: e.id, fn: (c, sh, B) => e.fn(timeShift(c, origin), sh, B) }));
+      const evs = events.filter((e) => !e.long && e.t >= origin && e.t < b).map((e) => ({ id: e.id, t: e.t, fn: (c, sh, B) => e.fn(timeShift(c, origin), sh, B) }));
+      const tw = performance.now();
       jobs.push(renderWindow(evs, origin, b, sr, (p) => {
         prog2[k] = p;
         report();
-      }).then((buf) => ({ buf, a, b, origin })));
+      }).then((buf) => ({ buf, a, b, origin, ms: performance.now() - tw, n: evs.length })));
     }
-    const longEv = events.filter((e) => e.long).map((e) => ({ id: e.id, fn: (c, sh, B) => e.fn(timeShift(c, 0), sh, B) }));
+    const longEv = events.filter((e) => e.long).map((e) => ({ id: e.id, t: e.t, fn: (c, sh, B) => e.fn(timeShift(c, 0), sh, B) }));
+    const tl = performance.now();
     jobs.push(renderWindow(longEv, 0, duration, sr, (p) => {
       prog2[K3] = p;
       report();
-    }).then((buf) => ({ buf, a: 0, b: duration, origin: 0, long: true })));
+    }).then((buf) => ({ buf, a: 0, b: duration, origin: 0, long: true, ms: performance.now() - tl, n: longEv.length })));
     const tr0 = performance.now();
     const parts = await Promise.all(jobs);
     const tRender = performance.now() - tr0;
@@ -5260,34 +5356,36 @@ void animate(inout Dab d) {
     }
     const tm0 = performance.now();
     const rep = master([L, R], sr, { target: score.target ?? -14, ceilingDb: -1.2, fadeOutEnd: score.fadeOutEnd ?? duration, fadeOut: score.fadeOut ?? 1.5 });
-    rep.timing = { render: tRender, master: performance.now() - tm0, chunks: K3 };
+    rep.timing = { render: tRender, master: performance.now() - tm0, chunks: K3, windows: parts.map((p) => [+p.a.toFixed(1), +p.b.toFixed(1), p.n ?? -1, Math.round(p.ms ?? 0)]) };
     const stems = withStems ? { music: m, sfx: x } : null;
     if (stems) for (const st of [stems.music, stems.sfx]) for (const c of st) for (let i = 0; i < c.length; i++) c[i] *= rep.gain;
     return { L, R, sr, report: rep, stems };
   }
   function timeShift(ctx, origin) {
-    if (origin === 0) return ctx;
+    const sr = ctx.sampleRate;
+    const o = Math.round(origin * sr);
+    const sh = (t) => Math.max(0, (Math.round(t * sr) - o) / sr);
     const shiftParam = (p) => {
       if (!p || p.__shifted) return p;
       for (const k of ["setValueAtTime", "linearRampToValueAtTime", "exponentialRampToValueAtTime", "setTargetAtTime", "cancelScheduledValues"]) {
         const f = p[k].bind(p);
-        p[k] = (v, t, ...rest) => k === "cancelScheduledValues" ? f(Math.max(0, v - origin)) : f(v, Math.max(0, t - origin), ...rest);
+        p[k] = (v, t, ...rest) => k === "cancelScheduledValues" ? f(sh(v)) : f(v, sh(t), ...rest);
       }
       p.__shifted = true;
       return p;
     };
     const wrapNode = (n) => {
-      for (const key2 of Object.keys(Object.getPrototypeOf(n)).concat(["frequency", "detune", "gain", "Q", "pan", "playbackRate", "offset"])) {
+      for (const key2 of ["frequency", "detune", "gain", "Q", "pan", "playbackRate", "offset"]) {
         const v = n[key2];
         if (v instanceof AudioParam) shiftParam(v);
       }
       if (typeof n.start === "function") {
         const st = n.start.bind(n);
-        n.start = (t = 0, ...rest) => st(Math.max(0, t - origin), ...rest);
+        n.start = (t = 0, ...rest) => st(sh(t), ...rest);
       }
       if (typeof n.stop === "function") {
         const sp = n.stop.bind(n);
-        n.stop = (t = 0) => sp(Math.max(0, t - origin));
+        n.stop = (t = 0) => sp(sh(t));
       }
       return n;
     };
@@ -5357,6 +5455,24 @@ void animate(inout Dab d) {
       b += beats;
     }
     return out;
+  }
+  function perform(notes, r, { vel = 0.6, swell = 0.25, jitter = 0.012, pedal = false, bpm = 72, barBeats = 3, rit = 0 } = {}) {
+    const spb = 60 / bpm;
+    const n = notes.length;
+    const t0 = notes.length ? notes[0].t : 0;
+    return notes.map((x, i) => {
+      const pos = n > 1 ? i / (n - 1) : 0;
+      const shape = Math.sin(Math.PI * Math.min(1, pos * 1.15));
+      const v = vel * (0.82 + swell * shape) * (0.94 + 0.12 * r.next()) * (i === n - 1 ? 0.88 : 1);
+      const dt = x.t - t0;
+      const t = t0 + dt * (1 + rit * pos * pos) + (r.next() - 0.5) * 2 * jitter;
+      let dur = x.dur;
+      if (pedal) {
+        const barEnd = Math.ceil((x.beat + 1e-6) / barBeats) * barBeats;
+        dur = Math.max(x.dur, (barEnd - x.beat) * spb + 0.15);
+      }
+      return { ...x, t, vel: v, dur };
+    });
   }
 
   // src/audio/testscore.js
@@ -5451,8 +5567,8 @@ void animate(inout Dab d) {
     CH.Eb.slice(0, 4).forEach((m, i) => E3(10.5, (c, sh, B) => strings(c, sh, B.strings, 10.5, m, 0.16, 3.5, (i - 1.5) * 0.3, 2.5, 1.2)));
     {
       const bpm = 72, t0 = C2.lullaby[0];
-      const notes = [...placePhrase(PHRASE_A, t0, bpm), ...placePhrase(PHRASE_B, t0 + 12 * spb(bpm), bpm)];
-      notes.forEach((n, i) => E3(n.t, (c, sh, B) => celesta(c, sh, B.celesta, n.t, n.midi + 12, 0.5 + 0.1 * Math.sin(i), 0.12)));
+      const notes = [...perform(placePhrase(PHRASE_A, t0, bpm), r, { vel: 0.5, swell: 0.3, bpm }), ...perform(placePhrase(PHRASE_B, t0 + 12 * spb(bpm), bpm), r, { vel: 0.52, swell: 0.3, bpm, rit: 0.02 })];
+      notes.forEach((n) => E3(n.t, (c, sh, B) => celesta(c, sh, B.celesta, n.t, n.midi + 12, n.vel, 0.12)));
       const harm = [CH.Eb, CH.Abmaj7, CH.Fm7, CH.Bb, CH.Eb, CH.Ab, CH.Bb7, CH.Eb];
       harm.forEach((ch, bar) => {
         const t = t0 + bar * 3 * spb(bpm);
@@ -5518,7 +5634,7 @@ void animate(inout Dab d) {
       const bpm = 80, t0 = C2.loveMeet + 0.3, b = spb(bpm);
       E3(C2.loveMeet - 0.4, (c, sh, B) => drone(c, sh, B.low, C2.loveMeet - 0.4, 39, 0.3, 4, 1.2, 2));
       [63, 67, 70, 74, 77, 79, 82, 86].forEach((m, i) => E3(C2.loveMeet + i * 0.06, (c, sh, B) => celesta(c, sh, B.celesta, C2.loveMeet + i * 0.06, m, 0.3 + i * 0.03, (i - 4) * 0.12)));
-      placePhrase(PHRASE_A, t0, bpm).forEach((n) => E3(n.t, (c, sh, B) => piano(c, sh, B.piano, n.t, n.midi, 0.62, n.dur * 1.1, 0.12)));
+      perform(placePhrase(PHRASE_A, t0, bpm), r, { vel: 0.62, swell: 0.3, pedal: true, bpm, rit: 0.015 }).forEach((n) => E3(n.t, (c, sh, B) => piano(c, sh, B.piano, n.t, n.midi, n.vel, n.dur, 0.12)));
       const counter = [[67, 2], [68, 1], [70, 3], [68, 2], [67, 1], [65, 3], [63, 2], [65, 1], [67, 2], [70, 1]];
       let bt = 0;
       for (const [m, d] of counter) {
@@ -5538,8 +5654,8 @@ void animate(inout Dab d) {
     {
       const t0 = C2.allAtOnce[0];
       CH.AbLyd.forEach((m, i) => {
-        E3(t0, (c, sh, B) => strings(c, sh, B.strings, t0, m, 0.11, 7.5, (i - 2) * 0.35, 2.5, 2.5));
-        E3(t0 + 0.5, (c, sh, B) => choir(c, sh, B.choir, t0 + 0.5, m + 12, 0.08, 7, (i - 2) * 0.3, 0.4));
+        E3(t0, (c, sh, B) => strings(c, sh, B.strings, t0, m, 0.11, 7.5, (i - 2) * 0.35, 2.5, 2.5), true);
+        E3(t0 + 0.5, (c, sh, B) => choir(c, sh, B.choir, t0 + 0.5, m + 12, 0.08, 7, (i - 2) * 0.3, 0.4), true);
       });
       E3(t0, (c, sh, B) => whoosh(c, sh, B.air, t0, 2.8, 0.25, 3e3, 400, 0));
       const aiA = [[70, 1.2], [79, 1.8], [77, 1.1], [75, 2.2]];
@@ -5554,12 +5670,12 @@ void animate(inout Dab d) {
     {
       const bpm = 72, t0 = C2.loss[0] - 0.4, b = spb(bpm);
       const phraseMinor = [[67, 1], [75, 1.5], [74, 0.5], [72, 1], [71, 1], [72, 1], [74, 1.5], [75, 0.5], [74, 1], [67, 3]];
-      placePhrase(phraseMinor, t0, bpm).forEach((n) => E3(n.t, (c, sh, B) => piano(c, sh, B.piano, n.t, n.midi, 0.5, n.dur * 1.1, 0.1)));
+      perform(placePhrase(phraseMinor, t0, bpm), r, { vel: 0.5, swell: 0.25, pedal: true, bpm, rit: 0.02 }).forEach((n) => E3(n.t, (c, sh, B) => piano(c, sh, B.piano, n.t, n.midi, n.vel, n.dur, 0.1)));
       const cutAt = C2.partnerFray + 0.7;
-      placePhrase(PHRASE_B, t0, bpm).forEach((n) => {
+      perform(placePhrase(PHRASE_B, t0, bpm), r, { vel: 0.55, swell: 0.3, bpm, jitter: 0.02 }).forEach((n) => {
         if (n.t >= cutAt) return;
         const dur = Math.min(n.dur, cutAt - n.t);
-        E3(n.t, (c, sh, B) => cello(c, sh, B.cello, n.t, n.midi - 12, 0.5, dur, -0.3));
+        E3(n.t, (c, sh, B) => cello(c, sh, B.cello, n.t, n.midi - 12, n.vel, dur, -0.3));
       });
       [CH.Cm, CH.Ab, CH.EbBb, CH.G7].forEach((ch, bar) => {
         const t = t0 + bar * 3 * b;
@@ -5634,8 +5750,8 @@ void animate(inout Dab d) {
         E3(t, (c, sh, B) => strings(c, sh, B.strings, t, m, 0.3, 0.3, 0.1, 0.05, 0.4));
       });
       const tr = C2.beadForm;
-      [39, 51, 58, 63, 67, 70, 75, 79].forEach((m, i) => E3(tr, (c, sh, B) => strings(c, sh, B.strings, tr, m, 0.34, 4.8, (i - 3.5) * 0.25, 0.08, 2.2)));
-      [63, 67, 70, 75].forEach((m, i) => E3(tr, (c, sh, B) => choir(c, sh, B.choir, tr, m, 0.3, 5, (i - 1.5) * 0.3, 0.85)));
+      [39, 51, 58, 63, 67, 70, 75, 79].forEach((m, i) => E3(tr, (c, sh, B) => strings(c, sh, B.strings, tr, m, 0.34, 4.8, (i - 3.5) * 0.25, 0.08, 2.2), true));
+      [63, 67, 70, 75].forEach((m, i) => E3(tr, (c, sh, B) => choir(c, sh, B.choir, tr, m, 0.3, 5, (i - 1.5) * 0.3, 0.85), true));
       E3(tr, (c, sh, B) => {
         piano(c, sh, B.piano, tr, 75, 0.85, 5, 0);
         piano(c, sh, B.piano, tr, 63, 0.6, 5, -0.1);
@@ -5655,6 +5771,21 @@ void animate(inout Dab d) {
     E3(C2.title[0], (c, sh, B) => bell(c, sh, B.bells, C2.title[0], 82, 0.28, 0, 1.6));
     [63, 67, 70, 75].forEach((m, i) => E3(C2.title[0] + 0.2, (c, sh, B) => choir(c, sh, B.choir, C2.title[0] + 0.2, m + 12, 0.07, 3.2, (i - 1.5) * 0.3, 0.4)));
     return { events: ev, duration: DURATION, fadeOutEnd: DURATION, fadeOut: 2, target: -14, fader: faderDb };
+  }
+
+  // src/audio/insttest.js
+  function instScore() {
+    const ev = [];
+    const E3 = (t, fn) => ev.push({ t, fn });
+    placePhrase(PHRASE_A, 0.3, 80).forEach((n) => E3(n.t, (c, sh, B) => piano(c, sh, B.piano, n.t, n.midi, 0.6, n.dur * 1.05, 0.1)));
+    [[51, 58, 63], [56, 60, 63], [53, 56, 60], [46, 58, 62]].forEach((ch, bar) => ch.forEach((m) => E3(0.3 + bar * 2.25, (c, sh, B) => piano(c, sh, B.piano, 0.3 + bar * 2.25, m - 12, 0.35, 2.2, -0.2))));
+    [[51, 58, 63, 67], [56, 60, 63, 68], [46, 56, 62, 65], [51, 58, 63, 67]].forEach((ch, k) => ch.forEach((m, i) => E3(10 + k * 1.4, (c, sh, B) => strings(c, sh, B.strings, 10 + k * 1.4, m, 0.35, 1.5, (i - 1.5) * 0.3, 0.3, 1))));
+    [63, 67, 70, 75].forEach((m, i) => E3(17, (c, sh, B) => choir(c, sh, B.choir, 17, m, 0.35, 4, (i - 1.5) * 0.3, i / 3)));
+    placePhrase(PHRASE_B, 23, 70).forEach((n) => E3(n.t, (c, sh, B) => cello(c, sh, B.cello, n.t, n.midi - 12, 0.6, n.dur, -0.2)));
+    placePhrase(PHRASE_A, 33, 90).forEach((n) => E3(n.t, (c, sh, B) => celesta(c, sh, B.celesta, n.t, n.midi + 12, 0.55, 0.1)));
+    [70, 72, 74, 75, 80, 79].forEach((m, i) => E3(41 + i * 0.8, (c, sh, B) => bell(c, sh, B.bells, 41 + i * 0.8, m, 0.5, 0, 1)));
+    for (let k = 0; k < 4; k++) E3(47 + k * 0.85, (c, sh, B) => heartbeat(c, sh, B.heart, 47 + k * 0.85, 0.5));
+    return { events: ev, duration: 52, fadeOutEnd: 52, fadeOut: 1 };
   }
 
   // src/main.js
@@ -5688,10 +5819,10 @@ void animate(inout Dab d) {
     canvas.width = w;
     canvas.height = h;
   }
-  window.__renderAudio = async (name = "film") => {
-    const score = name === "test" ? testScore() : filmScore();
+  window.__renderAudio = async (name = "film", chunks = null) => {
+    const score = name === "test" ? testScore() : name === "inst" ? instScore() : filmScore();
     const t0 = performance.now();
-    const res = await renderScore(score, { duration: score.duration, withStems: true });
+    const res = await renderScore(score, { duration: score.duration, withStems: true, chunks });
     const ms = performance.now() - t0;
     window.__audio = { L: res.L, R: res.R, mL: res.stems.music[0], mR: res.stems.music[1], xL: res.stems.sfx[0], xR: res.stems.sfx[1] };
     const r = res.report;

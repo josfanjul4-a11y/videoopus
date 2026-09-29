@@ -16,7 +16,8 @@ const page = await browser.newPage();
 page.on('pageerror', (e) => console.error('pageerror', e.message));
 await page.goto(pathToFileURL(join(root, 'held.html')).href + '?audio');
 await page.waitForFunction(() => window.__ready || window.__error);
-const info = await page.evaluate((s) => window.__renderAudio(s), score);
+const chunks = arg('chunks', null);
+const info = await page.evaluate(([s, c]) => window.__renderAudio(s, c ? parseInt(c, 10) : null), [score, chunks]);
 console.log(JSON.stringify(info));
 function wav(chs, sr) {
   const n = chs[0].length, nc = chs.length;

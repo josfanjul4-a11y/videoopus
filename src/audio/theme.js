@@ -38,3 +38,27 @@ export function placePhrase(phrase, t0, bpm, transpose = 0) {
   }
   return out;
 }
+
+// Perform a placed phrase like a player would: a little timing looseness,
+// dynamics that swell to the middle of the phrase and relax at its end, and
+// (for the piano) the sustain pedal holding each note to the end of its bar.
+// r: seeded rng; opts: { vel, swell, jitter, pedal, bpm, barBeats }
+export function perform(notes, r, { vel = 0.6, swell = 0.25, jitter = 0.012, pedal = false, bpm = 72, barBeats = 3, rit = 0 } = {}) {
+  const spb = 60 / bpm;
+  const n = notes.length;
+  const t0 = notes.length ? notes[0].t : 0;
+  return notes.map((x, i) => {
+    const pos = n > 1 ? i / (n - 1) : 0;
+    const shape = Math.sin(Math.PI * Math.min(1, pos * 1.15));
+    const v = vel * (0.82 + swell * shape) * (0.94 + 0.12 * r.next()) * (i === n - 1 ? 0.88 : 1);
+    // gentle ritardando toward the end of the phrase
+    const dt = x.t - t0;
+    const t = t0 + dt * (1 + rit * pos * pos) + (r.next() - 0.5) * 2 * jitter;
+    let dur = x.dur;
+    if (pedal) {
+      const barEnd = Math.ceil((x.beat + 1e-6) / barBeats) * barBeats;
+      dur = Math.max(x.dur, (barEnd - x.beat) * spb + 0.15);
+    }
+    return { ...x, t, vel: v, dur };
+  });
+}

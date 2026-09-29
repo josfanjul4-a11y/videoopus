@@ -13,6 +13,7 @@ import { buildFilm } from './film/film.js';
 import { renderScore, createPlayer } from './audio/engine.js';
 import { testScore } from './audio/testscore.js';
 import { filmScore } from './audio/score.js';
+import { instScore } from './audio/insttest.js';
 import { DURATION, MOVEMENTS, movementAt } from './film/cues.js';
 import { LineBatch } from './lines.js';
 import { strokeText } from './film/glyphs.js';
@@ -53,10 +54,10 @@ function sizeCanvas(canvas) {
 
 // Offline audio render for the tools: window.__renderAudio(name) then fetch
 // channels with window.__audioChunk(key, start, length) as base64 Float32.
-window.__renderAudio = async (name = 'film') => {
-  const score = name === 'test' ? testScore() : filmScore();
+window.__renderAudio = async (name = 'film', chunks = null) => {
+  const score = name === 'test' ? testScore() : name === 'inst' ? instScore() : filmScore();
   const t0 = performance.now();
-  const res = await renderScore(score, { duration: score.duration, withStems: true });
+  const res = await renderScore(score, { duration: score.duration, withStems: true, chunks });
   const ms = performance.now() - t0;
   window.__audio = { L: res.L, R: res.R, mL: res.stems.music[0], mR: res.stems.music[1], xL: res.stems.sfx[0], xR: res.stems.sfx[1] };
   const r = res.report;

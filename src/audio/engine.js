@@ -33,22 +33,32 @@ function makeGraph(ctx) {
   s2.connect(merger, 0, 2);
   s2.connect(merger, 1, 3);
   merger.connect(ctx.destination);
-  const bus = (dry, rev, dryGain, sendGain) => {
+  // eq: [[type, freq, gain, q], ...] applied before the dry/send split
+  const bus = (dry, rev, dryGain, sendGain, eq = null) => {
     const g = ctx.createGain();
+    let head = g;
+    if (eq) {
+      for (const [type, freq, gain, q] of eq) {
+        const f = ctx.createBiquadFilter();
+        f.type = type; f.frequency.value = freq; f.gain.value = gain; f.Q.value = q ?? 0.7;
+        head.connect(f);
+        head = f;
+      }
+    }
     const d = ctx.createGain();
     d.gain.value = dryGain;
     const s = ctx.createGain();
     s.gain.value = sendGain;
-    g.connect(d).connect(dry);
-    g.connect(s).connect(rev);
+    head.connect(d).connect(dry);
+    head.connect(s).connect(rev);
     return g;
   };
   const B = {
-    piano: bus(musicDry, musicRev, 0.85, 0.32),
+    piano: bus(musicDry, musicRev, 0.85, 0.34, [['peaking', 170, 2.5, 0.9], ['peaking', 3200, 1.5, 1.0], ['highshelf', 7500, -3, 0.7]]),
     celesta: bus(musicDry, musicRev, 0.7, 0.5),
-    strings: bus(musicDry, musicRev, 0.75, 0.45),
+    strings: bus(musicDry, musicRev, 0.7, 0.5, [['highshelf', 8000, -4, 0.7]]),
     cello: bus(musicDry, musicRev, 0.8, 0.35),
-    choir: bus(musicDry, musicRev, 0.55, 0.7),
+    choir: bus(musicDry, musicRev, 0.5, 0.75, [['highpass', 120, 0, 0.7]]),
     bells: bus(musicDry, musicRev, 0.6, 0.6),
     low: bus(musicDry, musicRev, 0.9, 0.2),
     heart: bus(sfxDry, sfxRev, 0.95, 0.12),
@@ -58,17 +68,36 @@ function makeGraph(ctx) {
   return { sh, B };
 }
 
-// Render the events of one time window [t0, t1) into a context starting at
-// `origin` (the pre-roll lets earlier notes ring into the window).
+// Render the events of one time window [origin, t1) into a context starting
+// at `origin` (the pre-roll lets earlier notes ring into the window).
+// Events are scheduled just in time (a suspend every STEP seconds schedules
+// the next stretch): a node chain waiting for a future start still gets
+// processed every quantum, so scheduling everything up front multiplies the
+// cost by the length of the window.
 async function renderWindow(events, origin, t1, sr, progress) {
   const len = Math.ceil((t1 - origin) * sr);
   const ctx = new OfflineAudioContext(4, len, sr);
   const { sh, B } = makeGraph(ctx);
-  for (const e of events) {
-    sh.rnd = rng(7919 * (e.id + 1));
-    e.fn(ctx, sh, B, origin);
+  const evs = events.slice().sort((a, b) => a.t - b.t);
+  let k = 0;
+  const AHEAD = 0.4, STEP = 1.0;
+  const schedule = (until) => {
+    while (k < evs.length && evs[k].t - origin < until) {
+      sh.rnd = rng(7919 * (evs[k].id + 1));
+      evs[k].fn(ctx, sh, B);
+      k++;
+    }
+  };
+  schedule(STEP + AHEAD);
+  const dur = t1 - origin;
+  for (let t = STEP; t < dur; t += STEP) {
+    const tt = t;
+    ctx.suspend(tt).then(() => {
+      schedule(tt + STEP + AHEAD);
+      if (progress) progress(tt / dur);
+      ctx.resume();
+    });
   }
-  if (progress) for (let t = 2; t < t1 - origin; t += 2) ctx.suspend(t).then(() => { progress(t / (t1 - origin)); ctx.resume(); });
   return ctx.startRendering();
 }
 
@@ -82,19 +111,22 @@ export async function renderScore(score, { duration, sr = 48000, onProgress = nu
   const len = Math.ceil(duration * sr);
   const events = score.events.map((e, i) => ({ ...e, id: i })).sort((a, b) => a.t - b.t);
   const K = chunks ?? Math.max(2, Math.min(8, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4));
-  const PRE = 10;
+  const PRE = 12;
   const jobs = [];
   const prog = new Float32Array(K + 1);
   const report = () => onProgress && onProgress(prog.reduce((a, b) => a + b, 0) / (K + 1));
+  // equal-length windows (with just-in-time scheduling the cost follows time)
   const bounds = Array.from({ length: K + 1 }, (_, k) => (duration * k) / K);
   for (let k = 0; k < K; k++) {
     const a = bounds[k], b = bounds[k + 1];
     const origin = Math.max(0, a - PRE);
-    const evs = events.filter((e) => !e.long && e.t >= origin && e.t < b).map((e) => ({ id: e.id, fn: (c, sh, B) => e.fn(timeShift(c, origin), sh, B) }));
-    jobs.push(renderWindow(evs, origin, b, sr, (p) => { prog[k] = p; report(); }).then((buf) => ({ buf, a, b, origin })));
+    const evs = events.filter((e) => !e.long && e.t >= origin && e.t < b).map((e) => ({ id: e.id, t: e.t, fn: (c, sh, B) => e.fn(timeShift(c, origin), sh, B) }));
+    const tw = performance.now();
+    jobs.push(renderWindow(evs, origin, b, sr, (p) => { prog[k] = p; report(); }).then((buf) => ({ buf, a, b, origin, ms: performance.now() - tw, n: evs.length })));
   }
-  const longEv = events.filter((e) => e.long).map((e) => ({ id: e.id, fn: (c, sh, B) => e.fn(timeShift(c, 0), sh, B) }));
-  jobs.push(renderWindow(longEv, 0, duration, sr, (p) => { prog[K] = p; report(); }).then((buf) => ({ buf, a: 0, b: duration, origin: 0, long: true })));
+  const longEv = events.filter((e) => e.long).map((e) => ({ id: e.id, t: e.t, fn: (c, sh, B) => e.fn(timeShift(c, 0), sh, B) }));
+  const tl = performance.now();
+  jobs.push(renderWindow(longEv, 0, duration, sr, (p) => { prog[K] = p; report(); }).then((buf) => ({ buf, a: 0, b: duration, origin: 0, long: true, ms: performance.now() - tl, n: longEv.length })));
   const tr0 = performance.now();
   const parts = await Promise.all(jobs);
   const tRender = performance.now() - tr0;
@@ -128,7 +160,7 @@ export async function renderScore(score, { duration, sr = 48000, onProgress = nu
   }
   const tm0 = performance.now();
   const rep = master([L, R], sr, { target: score.target ?? -14, ceilingDb: -1.2, fadeOutEnd: score.fadeOutEnd ?? duration, fadeOut: score.fadeOut ?? 1.5 });
-  rep.timing = { render: tRender, master: performance.now() - tm0, chunks: K };
+  rep.timing = { render: tRender, master: performance.now() - tm0, chunks: K, windows: parts.map((p) => [+p.a.toFixed(1), +p.b.toFixed(1), p.n ?? -1, Math.round(p.ms ?? 0)]) };
   const stems = withStems ? { music: m, sfx: x } : null;
   if (stems) for (const st of [stems.music, stems.sfx]) for (const c of st) for (let i = 0; i < c.length; i++) c[i] *= rep.gain;
   return { L, R, sr, report: rep, stems };
@@ -139,28 +171,34 @@ export async function renderScore(score, { duration, sr = 48000, onProgress = nu
 // automation time must be shifted by -origin. We wrap the context so that the
 // node factories return nodes whose time-taking methods are shifted.
 function timeShift(ctx, origin) {
-  if (origin === 0) return ctx;
+  // Every time is snapped to the absolute sample grid before shifting, so a
+  // note starts on the same frame in every window it is rendered in (float
+  // error in t - origin used to shift some notes by one frame, which showed
+  // as a click where two windows are spliced).
+  const sr = ctx.sampleRate;
+  const o = Math.round(origin * sr);
+  const sh = (t) => Math.max(0, (Math.round(t * sr) - o) / sr);
   const shiftParam = (p) => {
     if (!p || p.__shifted) return p;
     for (const k of ['setValueAtTime', 'linearRampToValueAtTime', 'exponentialRampToValueAtTime', 'setTargetAtTime', 'cancelScheduledValues']) {
       const f = p[k].bind(p);
-      p[k] = (v, t, ...rest) => (k === 'cancelScheduledValues' ? f(Math.max(0, v - origin)) : f(v, Math.max(0, t - origin), ...rest));
+      p[k] = (v, t, ...rest) => (k === 'cancelScheduledValues' ? f(sh(v)) : f(v, sh(t), ...rest));
     }
     p.__shifted = true;
     return p;
   };
   const wrapNode = (n) => {
-    for (const key of Object.keys(Object.getPrototypeOf(n)).concat(['frequency', 'detune', 'gain', 'Q', 'pan', 'playbackRate', 'offset'])) {
+    for (const key of ['frequency', 'detune', 'gain', 'Q', 'pan', 'playbackRate', 'offset']) {
       const v = n[key];
       if (v instanceof AudioParam) shiftParam(v);
     }
     if (typeof n.start === 'function') {
       const st = n.start.bind(n);
-      n.start = (t = 0, ...rest) => st(Math.max(0, t - origin), ...rest);
+      n.start = (t = 0, ...rest) => st(sh(t), ...rest);
     }
     if (typeof n.stop === 'function') {
       const sp = n.stop.bind(n);
-      n.stop = (t = 0) => sp(Math.max(0, t - origin));
+      n.stop = (t = 0) => sp(sh(t));
     }
     return n;
   };

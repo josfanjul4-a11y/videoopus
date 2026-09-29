@@ -12,7 +12,7 @@ low) in the review section once Phase 4 starts.
 | 1 Concept | Done. **HELD** approved at checkpoint #1. |
 | 2 Pre-production | Plan written (PLAN.md §4). Spikes done; see the table in session 1. |
 | 3 Production | Rough cut 1 done; checkpoint #2 passed (story reads, runs smoothly; score sounds synthetic). |
-| 4 Review loop | In progress. |
+| 4 Review loop | In progress. Audio pass 1 done (not yet heard by the user). Review pass 1 captured and logged below; its fixes are not started (H1 is designed, see HANDOFF.md). |
 
 Human checkpoints: (1) after the concept, (2) after the first complete rough cut,
 (3) after the final audio pass.
@@ -136,8 +136,58 @@ Watched at https://claude.ai/artifact/J3V7qMCf8P2XntN8X1vcvX (private).
 - Score: **"Sounds synthetic/cheap."** Instrument timbres need work.
 - Performance on the user's machine: **"Smooth."**
 
+### Session 1, continued: audio pass 1 (after checkpoint #2)
+
+Response to "sounds synthetic/cheap" (commit `2e3cd4b`):
+
+- Instruments rebuilt in `src/audio/synth.js`: piano from additive
+  stiff-string partials with a hammer comb, two-stage decay, unison beating
+  and hammer knock; strings as independent players with delayed vibrato,
+  body resonances and bow noise; choir by formant synthesis from a glottal
+  source with breath; cello with onset scoop and body modes; celesta with
+  beating bars. Reverb: early reflections and a tail that darkens.
+- Phrases are *performed* (`perform()` in `src/audio/theme.js`): timing
+  looseness, phrase-shaped dynamics, sustain pedal, ritardando.
+- Render speed: the slow part was scheduling every event up front (every
+  node chain stays active from the start of its window). Just-in-time
+  scheduling (`suspend()` every 1 s, schedule 1.4 s ahead) took the full
+  score from ~43–51 s to ~17 s render + ~2 s mastering on this 4-vCPU box.
+- Seam click at 68 s: float error in `t − origin` moved some notes by one
+  sample between parallel windows. Every time is now snapped to the absolute
+  sample grid (`timeShift` in `src/audio/engine.js`). A longer pre-roll made
+  it worse and was not the fix.
+- Levels: **−14.52 LUFS integrated, −1.19 dBTP, 0 clipped samples**;
+  silences at 0–0.6, 102.5–103.5 (the death) and 135.1–136 s.
+- The user has **not heard audio pass 1 yet**.
+
 ## Review log
 
 Severity: **high** (breaks the film or the brief), **medium** (visible or
 audible flaw a careful viewer notices), **low** (polish). Roles: D = director,
 C = cinematographer, E = graphics/audio engineer.
+
+### Pass 1 (2026-09-29)
+
+Captured 18 key stills at 1920×1080 (`review/raw/p1/k_*.png`, not committed;
+regenerate with `tools/capture.mjs`) and a contact sheet next to the refs:
+`review/pass1_keys.jpg`. Audio from the audio-pass-1 render. Fixes not
+started yet at the end of this pass (see HANDOFF.md for the planned fixes).
+
+| ID | Sev | Role | t (s) | Finding | Status |
+|---|---|---|---|---|---|
+| H1 | high | D, C | 90–111 | The old figure reads as sandstone or plaster: pebbly, mottled surface, jagged silhouette (camera-facing quads stick out at grazing angles), gold leaf on the back of the head and jaw reads as rust. The body is a gravel heap of square tiles, not ref 2's marble, smoke and silk. The key light is too warm (brown). The six silk wisps read as straight plastic straws. | open, designed |
+| H2 | high | C | 16–36 | Quickening is cluttered: the silk hems draw a wire cage over the embryo, teal haze patches read as blotches, the blood tissue reads as red dots, bubbles everywhere. | open |
+| M1 | medium | D, C | 63–71 | The midpoint pull-back ("all at once") is too distant: the life is a thin strip in the middle of the frame, the three arcs are faint. | open |
+| M2 | medium | C | 44–88 | Drip columns and the age slabs form a "skyline" or barcode; at 84–88 s the slabs dominate the frame. | open |
+| M3 | medium | C | 123–128 | The curtain of kept lives reads as uniform rain (same brightness, spacing and speed). | open |
+| M4 | medium | C | 40–88 | The life's paint masses are uniform gravel with no large forms; frames are denser than the refs (less black). | open |
+| M5 | medium | D | 60–71 | The child's trail is a straight stick rising to the upper right. | open |
+| M6 | medium | D (audio) | 50–60 | Love is about as loud as the climax (−9 vs −8 LUFS short-term); the climax must be the loudest moment. | open |
+| M7 | medium | C | 103–110 | The quadtree grid is a uniform, heavy graph-paper grid. It should be hairline and adaptive (fine cells where the detail is, i.e. the face). | open |
+| M8 | medium | C | 112–118 | The mosaic portrait is cropped by the bottom of the frame (the drapery part of the mosaic runs out of shot). Goes away with H1's head-and-shoulders chart. | open |
+| L1 | low | E | 36.3 | The birth star's core is a blown-out white disc (local, not a full-screen flash). | open |
+| L2 | low | D | 121.5 | The bead frame is plain; a few settling dust squares would help. | open |
+
+Still open from the rough cut: real-GPU frame times unknown (**high**; ask the
+user to open the artifact with `#bench`), score render time on a 2022 laptop
+unknown (~17 s + 2 s here).

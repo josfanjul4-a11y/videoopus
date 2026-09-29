@@ -8,6 +8,8 @@
 
 import { createEngine } from './engine.js';
 import { spikes } from './spikes.js';
+import { renderScore } from './audio/engine.js';
+import { testScore } from './audio/testscore.js';
 
 const params = new URLSearchParams(location.search);
 const OPT = {
@@ -39,7 +41,30 @@ function sizeCanvas(canvas) {
   canvas.height = h;
 }
 
+// Offline audio render for the tools: window.__renderAudio(name) then fetch
+// channels with window.__audioChunk(key, start, length) as base64 Float32.
+window.__renderAudio = async (name = 'test') => {
+  const score = name === 'test' ? testScore() : null;
+  const t0 = performance.now();
+  const res = await renderScore(score, { duration: score.duration, withStems: true });
+  const ms = performance.now() - t0;
+  window.__audio = { L: res.L, R: res.R, mL: res.stems.music[0], mR: res.stems.music[1], xL: res.stems.sfx[0], xR: res.stems.sfx[1] };
+  const r = res.report;
+  return { sr: res.sr, length: res.L.length, renderMs: ms, before: r.before, gain: r.gain, integrated: r.integrated, truePeak: r.truePeak };
+};
+window.__audioChunk = (key, start, len) => {
+  const a = window.__audio[key].subarray(start, start + len);
+  const u8 = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+
 async function boot() {
+  if (params.has('audio')) {
+    window.__ready = true;
+    return;
+  }
   const canvas = document.getElementById('c');
   sizeCanvas(canvas);
   const engine = createEngine(canvas);

@@ -127,3 +127,22 @@ export function createPaletteTexture(gl) {
   const tex = texture2D(gl, W, Hh, { internal: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE, filter: gl.LINEAR, data });
   return tex;
 }
+
+// The same gradients in JS (linear RGB), for build-time colouring.
+export function paletteAt(row, u) {
+  const stops = ROWS[row];
+  u = Math.min(1, Math.max(0, u));
+  let k = 0;
+  while (k < stops.length - 2 && u > stops[k + 1][1]) k++;
+  const [ha, pa] = stops[k], [hb, pb] = stops[k + 1];
+  const t = Math.min(1, Math.max(0, (u - pa) / Math.max(1e-6, pb - pa)));
+  const parse = (hex) => {
+    const n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v / 255);
+  };
+  const a = parse(ha), b = parse(hb);
+  return [0, 1, 2].map((i) => {
+    const v = a[i] + (b[i] - a[i]) * t;
+    return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  });
+}

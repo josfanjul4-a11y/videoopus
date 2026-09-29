@@ -138,7 +138,7 @@ uniform float uSizeScale;
 uniform vec4 uP0, uP1, uP2, uP3;
 struct Dab {
   vec3 pos; float size; float alpha; float rot; float aspect; vec3 color; float emissive; vec3 normal; float layer;
-  vec3 tangent; float lod;
+  vec3 tangent; float lod; float shape;
 };
 float hashf(float n) { return fract(sin(n * 12.9898 + 4.1414) * 43758.5453); }
 `;
@@ -152,12 +152,13 @@ out float vMat, vLayer, vSeed, vAlpha, vDepth, vEmis, vLod, vSizePx;
 out vec3 vN, vT;
 out vec3 vVP;
 out vec2 vMos;
+out float vShape;
 void main() {
   Dab d;
   vec3 rest = aPosSize.xyz;
   d.pos = rest; d.size = aPosSize.w * uSizeScale; d.alpha = 1.0; d.rot = aShape.x; d.aspect = aShape.y;
   d.color = aColor.rgb * aColor.rgb; d.emissive = 0.0; d.normal = aNormal.xyz; d.layer = aShape.z;
-  d.tangent = aTangent.xyz; d.lod = 0.0;
+  d.tangent = aTangent.xyz; d.lod = 0.0; d.shape = 0.0;
   float restSize = d.size;
   animate(d);
   vec4 wp = uModel * vec4(d.pos, 1.0);
@@ -195,6 +196,7 @@ void main() {
   lo = vec2(cm * lo.x - sm * lo.y, sm * lo.x + cm * lo.y);
   vMos = (vec2(dot(rest, uMosA), dot(rest, uMosB)) + lo) * uMosScale;
   vUV = aCorner * 0.5 + 0.5;
+  vShape = d.shape;
   vColor = d.color;
   vMat = aColor.a * 255.0;
   vLayer = d.layer;
@@ -216,6 +218,7 @@ in float vMat, vLayer, vSeed, vAlpha, vDepth, vEmis, vLod, vSizePx;
 in vec3 vN, vT;
 in vec3 vVP;
 in vec2 vMos;
+in float vShape;
 uniform sampler2DArray uBrush;
 uniform sampler2D uMosaic, uPalette;
 uniform vec3 uKeyDir, uKeyCol, uAmb, uRimCol;
@@ -245,6 +248,17 @@ void main() {
   float cellH = fract(m.r + vSeed * uCellMix * 0.0);
   // torn edges: a patch is either in or out of the stroke, decided per cell
   float cov = b.r;
+  if (vShape > 0.5) {
+    // analytic square-to-circle (superellipse, exponent vShape) for shed flakes
+    vec2 q = abs(vUV * 2.0 - 1.0);
+    float n = vShape;
+    float d = pow(pow(q.x, n) + pow(q.y, n), 1.0 / n);
+    float w = fwidth(d) * 1.2 + 1e-4;
+    cov = smoothstep(1.0 + w * 0.5, 1.0 - w * 0.5, d);
+    // paper fold marks along a diagonal, like ref 2's squares
+    float fold = 1.0 - smoothstep(0.0, 0.045, abs(q.x - q.y) * 0.7071);
+    b = vec4(cov, 0.5 + 0.1 * step(vUV.x, vUV.y), b.b, fold * step(22.0, n) * 0.55);
+  }
   if (uTorn > 0.0) {
     float thr = mix(0.5, 0.15 + 0.7 * cellH, uTorn);
     float w = fwidth(cov) + 0.02;
@@ -298,9 +312,9 @@ void main() {
     outc = col * (uAmb * 1.4 + uKeyCol * 0.35) + col * vEmis;
     crack = 0.0;
   } else {
-    float wrap = clamp((ndl + 0.4) / 1.4, 0.0, 1.0);
+    float wrap = vMat == 4.0 ? clamp((ndl + 0.12) / 1.12, 0.0, 1.0) : clamp((ndl + 0.4) / 1.4, 0.0, 1.0);
     vec3 H = normalize(L + V);
-    float gloss = vMat == 5.0 ? 0.0 : pow(max(dot(n, H), 0.0), 30.0) * 0.18;
+    float gloss = vMat == 5.0 ? 0.0 : pow(max(dot(n, H), 0.0), 30.0) * (vMat == 4.0 ? 0.35 : 0.18);
     outc = col * (uAmb + uKeyCol * wrap) + uKeyCol * gloss * lum;
     outc += col * vEmis;
   }
@@ -318,8 +332,9 @@ void main() {
 export const ANIM_STATIC = `
 void animate(inout Dab d) {
   // aAnim.x = appear time, aAnim.y = fade-in duration
-  float t0 = aAnim.x, dur = max(aAnim.y, 1e-3);
-  d.alpha *= uAlpha * smoothstep(t0, t0 + dur, uTime);
+  // aAnim.y <= 0 means always visible
+  float t0 = aAnim.x, dur = aAnim.y;
+  d.alpha *= uAlpha * (dur > 0.0 ? smoothstep(t0, t0 + dur, uTime) : 1.0);
 }`;
 
 const cache = new Map();
@@ -349,6 +364,7 @@ export function createDabRenderer(gl, atlas, mosaicTex, paletteTex) {
         .v4('uField', u.field ?? [1, 0, 0.1, 0.5]).v4('uFieldN', u.fieldN ?? [1, 0, 0.1, 0]).v3('uFieldC', u.fieldC ?? [0, 0, 0])
         .f1('uCellMix', u.cellMix ?? 0).f1('uFacet', u.facet ?? 0.35).f1('uTorn', u.torn ?? 0.6)
         .tex('uBrush', 0, atlas.tex, gl.TEXTURE_2D_ARRAY).tex('uMosaic', 1, mosaicTex).tex('uPalette', 2, paletteTex);
+      if (u.bind) u.bind(p);
       gl.bindVertexArray(set.gpu.vao);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, set.count);
       gl.bindVertexArray(null);

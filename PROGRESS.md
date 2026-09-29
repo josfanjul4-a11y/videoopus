@@ -9,8 +9,8 @@ low) in the review section once Phase 4 starts.
 
 | Phase | State |
 |---|---|
-| 1 Concept | Done. **HELD** chosen. Waiting on human checkpoint #1. |
-| 2 Pre-production | Not started |
+| 1 Concept | Done. **HELD** approved at checkpoint #1. |
+| 2 Pre-production | Plan written (PLAN.md §4). Spikes done; see the table in session 1. |
 | 3 Production | Not started |
 | 4 Review loop | Not started |
 
@@ -44,3 +44,40 @@ Human checkpoints: (1) after the concept, (2) after the first complete rough cut
 - Next: human checkpoint #1 on the concept, then Phase 2 (timed shot list,
   score, technical breakdown, budgets) and spikes for the riskiest techniques
   (Haar shedding, the cellular paint look, hairline gold lines in 3D).
+
+### Session 1, continued: checkpoint #1 and Phase 2
+
+- **Checkpoint #1:** the user chose **HELD** (recommended option).
+- PLAN.md §4 written: cue table, shot list, score design, technical
+  breakdown, architecture, budgets, spike criteria, Haar-shedding details.
+- Tooling: `tools/build.mjs` (esbuild bundle → `held.html`, fails on any URL),
+  `tools/capture.mjs` (stills and bursts through `window.__renderAt(t)`),
+  `tools/contact.py` (contact sheets, optionally next to the refs),
+  `tools/audio.mjs` (offline render → float WAV mix + music/SFX stems),
+  `tools/audio_check.py` (BS.1770-4 loudness, true peak, silences, per-cue
+  masking check against the stems).
+- Engine: matter pass (premultiplied dabs + composited depth for line
+  occlusion), line pass (MAX blend, analytic AA), post (bloom with a knee,
+  exponential shoulder, painterly background, grain, triangular dither).
+
+**Spike results**
+
+| Spike | Result | Evidence / notes |
+|---|---|---|
+| S1 lines, background, post | pass | lines measure ~1.5 px with clean AA and no joint beads (4× crop). Bloom veil lifted blacks to (8,6,8); fixed with a bloom knee |
+| S2 cellular paint | pass, direction set | Per-stamp cells read as **confetti** (rejected). An **object-space mosaic** continuous across dabs, with colour from a palette field at each patch centre, reads as ref 1's paint. Style frame: `review/spikes/s2_style_frame_ref1.jpg` |
+| S3 Haar shedding | pass (mechanism) | Figure → squares → mosaic in the life's colours → 6 merges → bead, all closed-form in *t*. Bug found and fixed (the colour pyramid wrote coarse levels to the wrong texel). Needs art direction at the real framing |
+| S4 figure / embryo | partial | Figure legible only after two changes: **chiaroscuro** (key light from behind-left) and a **gold contour of the profile** (the AI's line tracing the face). Body as flowing drapery instead of an SDF torso. Beauty not there yet. Embryo not spiked yet: production item |
+| S5 silk | pass | reads as glowing silk in the style frame; smoke wisps need thinner, twistier variants |
+| S6 audio | pass on levels, fail on speed | test score: −14.03 LUFS, −1.19 dBTP, 0 clipped samples (Python agrees with the in-page meter). Render 11.5 s for 57 s of audio here. **Parallel OfflineAudioContexts give 3.7× on 4 cores**, so the score will render in parallel chunks at page load |
+
+**Open issues carried into production**
+
+| Sev | Issue |
+|---|---|
+| high | Figure is legible but not beautiful (pebbly surface, log-like shoulders, flat silk strips). |
+| high | Embryo not yet built. |
+| high | Audio render time: implement parallel chunking with per-event seeded RNG. |
+| medium | Style frame is denser than the refs (41 % of pixels below luma 20 vs 51–56 %). Compose with more black. |
+| medium | Paint edges too gravel-like; want longer flowing contours at mass edges. |
+| low | Wash layer is barely visible; tune or drop. |

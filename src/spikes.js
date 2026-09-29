@@ -8,7 +8,9 @@ import { identity } from './math.js';
 import { paintAlongCurve, splashTongues, dripsBelow, spray, starLines, beadThread } from './gen.js';
 import { DiscSet, DISC } from './discs.js';
 import { ribbonFromCurve } from './silk.js';
-import { PAL } from './mosaic.js';
+import { PAL, paletteAt } from './mosaic.js';
+import { figureDabs, figureSmoke, profileContour } from './figure.js';
+import { buildShed, ANIM_SHED_SQUARE, ANIM_SHED_FIGURE, ANIM_SHED_DUST } from './shed.js';
 
 const ID = identity();
 const ANIM_WASH = `
@@ -281,4 +283,99 @@ function frame1Spike(engine) {
   };
 }
 
-export const spikes = { lines: linesSpike, paint: paintSpike, frame1: frame1Spike };
+// S3 + S4: the figure, and Haar shedding into a mosaic, merges, the bead.
+function shedSpike(engine) {
+  const gl = engine.gl;
+  const r = rng(33);
+  const dabs = figureDabs(r, 26000);
+  const merges = [8.0, 9.4, 10.6, 11.6, 12.4, 13.0];
+  const bead = { pos: [2.6, 1.15, 0.0], r: 0.09 };
+  const mosaic = { origin: [2.6, 1.15, -0.2], A: [1, 0, 0], B: [0, 1, 0], N: [0, 0, 1], pitch: 0.04, fill: 0.74 };
+  const S = buildShed(gl, dabs, r, {
+    chart: { origin: [-0.55, 0.3, 0], A: [1, 0, 0], B: [0, 1, 0], Nrm: [0, 0, 1], size: 1.7 },
+    sweep: (u, v, rr) => {
+      const face = Math.exp(-(((u - 0.18) / 0.12) ** 2 + ((v - 0.68) / 0.16) ** 2));
+      return 1.0 + (1 - u) * 3.2 + rr.gauss() * 0.18 + face * 0.9;
+    },
+    lifeColor: (i, j, mc, rr) => paletteAt(PAL.LIFE, Math.min(0.97, Math.max(0, (i / 64 - 0.05) * 1.1 + rr.gauss() * 0.04))),
+    mosaic, merges, contract: [13.25, 14.0], bead, sortDir: [0, 0, -1], flight: 2.0, detach: 0.35,
+  });
+  const beadDisc = new DiscSet();
+  beadDisc.add({ pos: bead.pos, r: bead.r, type: DISC.BEAD, t0: 13.75, fade: 0.4, seed: 1 });
+  beadDisc.build(gl);
+  const thread = new LineBatch();
+  thread.line([bead.pos[0], bead.pos[1] + 0.09, 0], [bead.pos[0], 4, 0], { width: 1.1, intensity: 0.9 });
+  thread.line([bead.pos[0], bead.pos[1] - 0.09, 0], [bead.pos[0], -2, 0], { width: 1.1, intensity: 0.9 });
+  thread.build(gl);
+  const grid = new LineBatch();
+  // the AI's hairline grid around the figure (coarse levels of the quadtree)
+  for (let k = 0; k <= 8; k++) {
+    const x = -0.55 + (1.7 * k) / 8, y = 0.3 + (1.7 * k) / 8;
+    grid.line([x, 0.3, 0.05], [x, 2.0, 0.05], { width: 0.8, intensity: 0.45 });
+    grid.line([-0.55, y, 0.05], [1.15, y, 0.05], { width: 0.8, intensity: 0.45 });
+  }
+  grid.build(gl);
+  return {
+    shot: (t) => {
+      const s = baseShot([1.55, 1.2, 5.4], [1.55, 1.15, 0], 40);
+      s.light.keyDir = [-0.65, 0.55, 0.55];
+      s.light.amb = [0.07, 0.08, 0.1];
+      s.grade.bloomGain = 0.3;
+      return s;
+    },
+    items: (t) => [
+      { kind: 'matter', center: [0, 1.1, 0], draw: (f, R) => R.dabs.draw(S.fig, ANIM_SHED_FIGURE, f, S.uniforms({ crack: 0.5, torn: 0.4, jitter: 0.5, facet: 0.3, mosScale: 40 })) },
+      { kind: 'matter', center: [1.5, 1.1, 0.1], draw: (f, R) => R.dabs.draw(S.sq, ANIM_SHED_SQUARE, f, S.uniforms({ crack: 0.6, torn: 0, jitter: 0.25 })) },
+      { kind: 'matter', center: [1.5, 1.1, 0.2], draw: (f, R) => R.dabs.draw(S.dust, ANIM_SHED_DUST, f, S.uniforms({ jitter: 0.4, torn: 0 })) },
+      { kind: 'matter', center: bead.pos, bias: -0.3, draw: (f, R) => R.discs.draw(beadDisc, f, { core: 0.6 }) },
+      { kind: 'line', draw: (f, R) => { R.lines.draw(grid, { model: ID, alpha: Math.min(1, Math.max(0, (t - 0.3) / 0.8)) * (1 - Math.min(1, Math.max(0, (t - 6) / 2))) }); R.lines.draw(thread, { model: ID, reveal: Math.min(1, Math.max(0, (t - 14.0) / 1.2)), revealHead: 1 }); } },
+    ],
+  };
+}
+
+function figureSpike(engine) {
+  const gl = engine.gl;
+  const r = rng(41);
+  const set = new DabSet();
+  figureDabs(r, 30000).forEach((d) => set.add({ ...d, anim: [0, 0, 0, 0] }));
+  set.build(gl, [0.45, -0.1, -0.9]);
+  const smoke = new DabSet();
+  figureSmoke(r, 0).forEach((d) => smoke.add({ ...d, anim: [0, 0, 0, 0] }));
+  smoke.build(gl, [0.45, -0.1, -0.9]);
+  // drapery: marble paint flowing down and right from the shoulders, and silk wisps
+  const drape = new DabSet();
+  const wisps = [];
+  for (let k = 0; k < 9; k++) {
+    // strands leave the shoulders and fall away down and to the right
+    const y0 = 0.72 + k * 0.035 + r.next() * 0.03, z0 = (r.next() - 0.5) * 0.45, ph = r.next() * 6, drop = 0.35 + r.next() * 0.5, len = 1.2 + r.next() * 1.4;
+    const x0 = 0.02 + k * 0.03;
+    const curve = (s) => [x0 + s * len, y0 - s * drop - s * s * 0.3 + Math.sin(s * 3 + ph) * 0.05 * s, z0 + Math.sin(s * 2 + ph) * 0.1 * s];
+    paintAlongCurve(drape, r, { curve, count: 1100, thick: (s) => 0.12 * (1 - s * 0.6), depth: (s) => 0.06, sizeMin: 0.04, sizeMax: 0.12, goldFrac: 0.06, color: LIN.bone, brushW: [1, 6, 0, 1, 5] });
+    const rib = ribbonFromCurve({ centre: (s) => { const c = curve(s); return [c[0], c[1] + 0.03, c[2] + 0.04]; }, width: (s) => 0.05 + 0.1 * s, twist: (s) => ph + s * 4, samples: 160, length: len });
+    rib.build(gl);
+    wisps.push(rib);
+  }
+  drape.build(gl, [0.45, -0.1, -0.9]);
+  const contour = new LineBatch();
+  contour.polyline(profileContour(), { width: 1.3, intensity: 1.0, hi: 0.4 });
+  contour.build(gl);
+  return {
+    shot: () => {
+      const s = baseShot([-0.95, 1.35, 2.9], [0.35, 1.1, 0], 36);
+      s.light.keyDir = [-0.62, 0.4, -0.68];
+      s.light.keyCol = [2.0, 1.72, 1.35];
+      s.light.amb = [0.02, 0.024, 0.036];
+      s.grade.bloomGain = 0.25;
+      return s;
+    },
+    items: () => [
+      { kind: 'matter', center: [1.0, 0.8, 0], draw: (f, R) => R.dabs.draw(smoke, ANIM_STATIC, f, { alpha: 0.8, crack: 0, torn: 0, jitter: 0.3 }) },
+      { kind: 'matter', center: [0.9, 0.7, 0], draw: (f, R) => R.dabs.draw(drape, ANIM_STATIC, f, { crack: 0.25, torn: 0.2, jitter: 0.3, facet: 0.08, mosScale: 22, cellMix: 1, field: [1, 0, 0.18, 0.0], fieldN: [2.0, 0.08, 0.25, PAL.FIGURE] }) },
+      { kind: 'matter', center: [0.9, 0.8, 0.1], bias: -0.05, draw: (f, R) => wisps.forEach((w, k) => R.silk.draw(w, f, { colA: [0.45, 0.47, 0.5], colB: [1.1, 1.05, 0.95], fibres: 10, alpha: 0.6, flutter: [0.02, 5, 0.8, k] })) },
+      { kind: 'line', draw: (f, R) => R.lines.draw(contour, { model: ID, occlude: 0 }) },
+      { kind: 'matter', center: [0, 1.1, 0], draw: (f, R) => R.dabs.draw(set, ANIM_STATIC, f, { crack: 0.3, torn: 0.3, jitter: 0.3, facet: 0.1, mosScale: 45 }) },
+    ],
+  };
+}
+
+export const spikes = { lines: linesSpike, paint: paintSpike, frame1: frame1Spike, shed: shedSpike, figure: figureSpike };
